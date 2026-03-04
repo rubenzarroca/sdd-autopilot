@@ -1,7 +1,19 @@
 {
-  "slug": "sdd-autopilot",
-  "version": "1.0.0",
-  "category": "workflow",
-  "tags": ["sdd", "automation", "ptc", "specification-driven"],
-  "license": "MIT"
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "sdd-autopilot",
+  "description": "SDD Autopilot — Zero-stop, fully autonomous specify → plan → tasks → implement → verify → review → PR pipeline.",
+  "owner": {
+    "name": "Rubén Zarroca"
+  },
+  "plugins": [
+    {
+      "name": "sdd-autopilot",
+      "description": "SDD Autopilot — Zero-stop, fully autonomous specify → plan → tasks → implement → verify → review → PR pipeline. Uses PTC (Programmatic Tool Calling) with cost-optimized model routing: Sonnet for bulk work, Opus as adversarial reviewer.",
+      "author": {
+        "name": "Rubén Zarroca"
+      },
+      "source": "./",
+      "category": "workflow"
+    }
+  ]
 }
