@@ -1,0 +1,22 @@
+{
+  "name": "sdd-autopilot-engine",
+  "version": "1.0.0",
+  "description": "SDD Autopilot PTC pipeline engine",
+  "type": "module",
+  "main": "build/index.js",
+  "bin": {
+    "sdd-autopilot": "build/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "node build/index.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  }
+}

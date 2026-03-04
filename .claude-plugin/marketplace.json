@@ -1,0 +1,7 @@
+{
+  "slug": "sdd-autopilot",
+  "version": "1.0.0",
+  "category": "workflow",
+  "tags": ["sdd", "automation", "ptc", "specification-driven"],
+  "license": "MIT"
+}

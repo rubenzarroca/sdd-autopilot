@@ -1,0 +1,12 @@
+{
+  "name": "sdd-autopilot",
+  "description": "SDD Autopilot — Zero-stop, fully autonomous specify → plan → tasks → implement → verify → review → PR pipeline. Uses PTC (Programmatic Tool Calling) for agentic phases.",
+  "author": {
+    "name": "Rubén Zarroca"
+  },
+  "skills": [
+    "./skills/auto-run",
+    "./skills/auto-init",
+    "./skills/auto-status"
+  ]
+}
