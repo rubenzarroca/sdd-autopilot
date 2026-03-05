@@ -1,7 +1,7 @@
 ---
 name: haiku-validator
 description: Fast gate validator. Checks whether a stage output satisfies required semantic checks (file exists, coverage, DAG validity). Use when a contract gate has validator=haiku-validator.
-model: claude-haiku-4-5-20251001
+model: haiku
 tools:
   - Read
   - Grep

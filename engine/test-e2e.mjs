@@ -24,6 +24,8 @@ import {
   handleMemoryWrite,
   handleTickDecay,
   handleAppendSignal,
+  handleUpdateTask,
+  handleUpdateFeature,
 } from "./build/handlers.js";
 
 let passed = 0;
@@ -413,6 +415,101 @@ h = await handleAppendSignal({
 });
 const signalLines = readFileSync(signalsPath, "utf-8").trim().split("\n");
 assert("signals.jsonl has 2 entries (append-only)", signalLines.length === 2);
+
+// ── Test 12: Happy Path — full pipeline via MCP tools only ──────
+// This test would have caught the sdd_update_task gap from day one.
+// It uses ONLY handler functions (no direct StateManager mutations)
+// to prove the complete happy path is reachable end-to-end.
+console.log("\n=== Test 12: Happy Path (full pipeline, no LLM) ===");
+
+const HP = "happy-path-feature";
+await sm.createFeature(HP);
+
+// Seed tasks via StateManager — simulates what task-decomposer would write.
+// All other state mutations go through MCP handlers only.
+const hpState = await sm.read();
+hpState.features[HP].tasks = {
+  "TASK-001": { status: "pending", title: "Implement core logic" },
+  "TASK-002": { status: "pending", title: "Write tests" },
+  "TASK-003": { status: "pending", title: "Update docs" },
+};
+await sm.write(hpState);
+
+// draft → specified
+h = await handleTransition({ project_path: projectPath, feature_id: HP, from_state: "draft", to_state: "specified", agent_id: "spec-generator" });
+assert("happy path: draft → specified", h.success === true);
+
+// sdd_update_feature: persist plan_path (plan-architect would call this after writing plan.md)
+h = await handleUpdateFeature({ project_path: projectPath, feature_id: HP, updates: { plan_path: "specs/happy-path-feature/plan.md" } });
+assert("happy path: sdd_update_feature sets plan_path", h.updated === true && h.fields.includes("plan_path"));
+
+// specified → planned
+h = await handleTransition({ project_path: projectPath, feature_id: HP, from_state: "specified", to_state: "planned", agent_id: "plan-architect" });
+assert("happy path: specified → planned", h.success === true);
+
+// sdd_update_feature: persist tasks_path
+h = await handleUpdateFeature({ project_path: projectPath, feature_id: HP, updates: { tasks_path: "specs/happy-path-feature/tasks.md" } });
+assert("happy path: sdd_update_feature sets tasks_path", h.updated === true);
+
+// planned → decomposed
+h = await handleTransition({ project_path: projectPath, feature_id: HP, from_state: "planned", to_state: "decomposed", agent_id: "task-decomposer" });
+assert("happy path: planned → decomposed", h.success === true);
+
+// sdd_update_feature: git-operator sets worktree + branch before implementation starts
+h = await handleUpdateFeature({ project_path: projectPath, feature_id: HP, updates: { worktree_path: "/tmp/worktree-happy-path", branch: "feat/happy-path-feature" } });
+assert("happy path: sdd_update_feature sets worktree+branch", h.updated === true && h.fields.length === 2);
+
+// decomposed → implementing (tasks exist, precondition passes)
+h = await handleTransition({ project_path: projectPath, feature_id: HP, from_state: "decomposed", to_state: "implementing", agent_id: "implementation-engine" });
+assert("happy path: decomposed → implementing (tasks seeded)", h.success === true);
+
+// implementing → verifying is BLOCKED because tasks are still pending
+h = await handleTransition({ project_path: projectPath, feature_id: HP, from_state: "implementing", to_state: "verifying", agent_id: "verification-engine" });
+assert("happy path: implementing → verifying blocked (tasks not done)", h.success === false && h.error.code === "PRECONDITION_FAILED");
+
+// sdd_update_task: mark tasks completed one by one (this was the showstopper gap)
+h = await handleUpdateTask({ project_path: projectPath, feature_id: HP, task_id: "TASK-001", status: "completed" });
+assert("happy path: sdd_update_task TASK-001 completed", h.updated === true);
+
+// still blocked — two tasks remain
+h = await handleTransition({ project_path: projectPath, feature_id: HP, from_state: "implementing", to_state: "verifying", agent_id: "verification-engine" });
+assert("happy path: implementing → verifying still blocked (TASK-002, TASK-003 pending)", h.success === false);
+
+h = await handleUpdateTask({ project_path: projectPath, feature_id: HP, task_id: "TASK-002", status: "completed" });
+assert("happy path: sdd_update_task TASK-002 completed", h.updated === true);
+
+h = await handleUpdateTask({ project_path: projectPath, feature_id: HP, task_id: "TASK-003", status: "completed" });
+assert("happy path: sdd_update_task TASK-003 completed", h.updated === true);
+
+// confirm via sdd_get_state that all tasks are done in persisted state
+h = await handleGetState({ project_path: projectPath, feature_id: HP });
+assert("happy path: all tasks confirmed completed in state.json", Object.values(h.tasks).every(t => t.status === "completed"));
+
+// implementing → verifying (all tasks done — precondition satisfied)
+h = await handleTransition({ project_path: projectPath, feature_id: HP, from_state: "implementing", to_state: "verifying", agent_id: "verification-engine" });
+assert("happy path: implementing → verifying (all tasks done)", h.success === true);
+
+// verifying → reviewing (PASS)
+h = await handleTransition({ project_path: projectPath, feature_id: HP, from_state: "verifying", to_state: "reviewing", agent_id: "verification-engine" });
+assert("happy path: verifying → reviewing (PASS)", h.success === true);
+
+// reviewing → pr_created (APPROVE)
+h = await handleTransition({ project_path: projectPath, feature_id: HP, from_state: "reviewing", to_state: "pr_created", agent_id: "adversarial-reviewer" });
+assert("happy path: reviewing → pr_created (APPROVE)", h.success === true);
+
+// final state check
+h = await handleGetState({ project_path: projectPath, feature_id: HP });
+assert("happy path: final state is pr_created", h.state === "pr_created");
+assert("happy path: branch persisted", h.branch === "feat/happy-path-feature");
+assert("happy path: worktree_path persisted", h.worktree_path === "/tmp/worktree-happy-path");
+assert("happy path: plan_path persisted", h.plan_path === "specs/happy-path-feature/plan.md");
+
+// error paths for the two new tools
+h = await handleUpdateTask({ project_path: projectPath, feature_id: HP, task_id: "TASK-999", status: "completed" });
+assert("happy path: sdd_update_task unknown task returns error", typeof h.error === "string");
+
+h = await handleUpdateFeature({ project_path: projectPath, feature_id: "nonexistent-feature", updates: { branch: "test" } });
+assert("happy path: sdd_update_feature unknown feature returns error", typeof h.error === "string");
 
 // ── Cleanup ───────────────────────────────────────────────────────
 try {

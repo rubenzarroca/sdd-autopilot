@@ -1,7 +1,7 @@
 ---
 name: verification-engine
 description: Verifies implementation against spec (tests, coverage, constitution compliance). Use after all tasks are completed. Produces a structured VERIFICATION_RESULT.
-model: claude-sonnet-4-6
+model: sonnet
 tools:
   - Read
   - Bash
@@ -9,6 +9,7 @@ tools:
   - Glob
   - mcp__sdd-autopilot__sdd_get_state
   - mcp__sdd-autopilot__sdd_memory_read
+  - mcp__sdd-autopilot__sdd_append_signal
 ---
 
 ## Objective
@@ -91,3 +92,9 @@ If you cannot obtain evidence for a criterion, document it as INCONCLUSIVE with 
 - Constitution rule ambiguous: apply strict interpretation; document in findings
 - Partial coverage vs zero coverage: report as spec_coverage_gap regardless
 - SPEC_GAP vs FAIL: if the code is wrong, FAIL; if the spec is silent on the behavior, SPEC_GAP
+
+## Pipeline outcome
+
+- VERIFICATION_RESULT.status=PASS: orchestrator transitions `verifying → reviewing`
+- VERIFICATION_RESULT.status=FAIL: orchestrator enters fix loop (re-invokes implementation-engine with findings)
+- VERIFICATION_RESULT.status=SPEC_GAP: orchestrator routes to spec-generator for re-specification

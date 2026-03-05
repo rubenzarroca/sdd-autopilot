@@ -38,7 +38,14 @@ For each phase:
    c. If opus-coach feedback contains any "critical" severity finding: re-launch the phase subagent with the v1 artifact + feedback for correction
 6. If no pair_review: launch the subagent directly
 7. Call `mcp__sdd-autopilot__sdd_evaluate_gate` with the produced artifacts
-8. If gate passed: call `mcp__sdd-autopilot__sdd_transition` to move to the next state + call `mcp__sdd-autopilot__sdd_log_event`
+8. If gate passed:
+   - For phases with `gate.type = "mechanical"` or `"haiku-validator"`: call `mcp__sdd-autopilot__sdd_transition` to move to the next state
+   - For phases with `gate.type = "self"` (verify, review): the transition depends on the subagent's structured output:
+     - verify: VERIFICATION_RESULT.status=PASS → call `sdd_transition(verifying→reviewing)`. FAIL/SPEC_GAP → go to step 9.
+     - review: REVIEW_RESULT.decision=APPROVE → call `sdd_transition(reviewing→pr_created)`. REQUEST_CHANGES → call `sdd_transition(reviewing→fix_review)` then enter fix loop.
+   - Call `mcp__sdd-autopilot__sdd_log_event`
+   - For plan phase: call `mcp__sdd-autopilot__sdd_update_feature` to persist `plan_path` on the feature
+   - For tasks phase: call `mcp__sdd-autopilot__sdd_update_feature` to persist `tasks_path` on the feature
 9. If gate failed: call `mcp__sdd-autopilot__sdd_classify_failure` to determine the category:
    - `implementation_bug`: enter fix loop (see below)
    - `spec_gap`: pause and communicate to the user; wait for input
@@ -93,8 +100,8 @@ The implement phase runs per-task, not as a single invocation:
    a. Extract the task block from tasks.md
    b. Launch `implementation-engine` with just that task block + spec + plan + memory
    c. If pair_review is enabled for this stage: run opus-coach on the result
-   d. Mark the task as completed in state
-4. After all tasks complete: transition to `verifying`
+   d. The implementation-engine marks the task completed via `sdd_update_task` and logs via `sdd_transition(implementing→implementing)`. Verify task status is "completed" in state before moving to next task.
+4. After all tasks complete: call `sdd_transition(implementing→verifying)`
 
 ## Signal routing
 
@@ -142,6 +149,7 @@ After PR creation succeeds:
 1. Run `haiku-analyst` in retro mode (compare first-pass diff with final diff)
 2. Process buffered META_LEARNING_HINT signals
 3. Write learnings to memory via `sdd_memory_write`
+4. Call `mcp__sdd-autopilot__sdd_tick_decay` to decrement TTLs on learned patterns and prune stale entries
 
 ## Flags
 

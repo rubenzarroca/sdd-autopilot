@@ -1,31 +1,13 @@
 {
   "pipeline": "sdd-autopilot",
-  "version": "2.1",
+  "version": "2.2",
   "contracts": {
-    "codebase-index": {
-      "agent": "codebase-indexer",
-      "model": "haiku",
-      "input": {
-        "required": [],
-        "optional": [],
-        "max_tokens": 500
-      },
-      "output": {
-        "artifacts": ["specs/{feature}/codebase-map.md"]
-      },
-      "gate": {
-        "type": "mechanical",
-        "checks": ["codebase-map.md created"]
-      },
-      "failure_modes": ["LIST_DIR_ERROR"],
-      "next": "triage"
-    },
     "triage": {
       "agent": "haiku-analyst",
       "model": "haiku",
       "input": {
-        "required": ["feature_description", "specs/{feature}/codebase-map.md"],
-        "optional": [],
+        "required": ["feature_description"],
+        "optional": ["specs/{feature}/codebase-map.md"],
         "max_tokens": 1000
       },
       "output": {
@@ -55,7 +37,8 @@
       },
       "gate": {
         "type": "mechanical",
-        "checks": ["spec.md created", "requirements section non-empty"]
+        "validator": "haiku-validator",
+        "checks": ["spec.md created", "requirements section non-empty", "every requirement contains must or shall"]
       },
       "pair_review": { "enabled": true, "max_corrections": 1 },
       "failure_modes": ["NEEDS_CLARIFICATION", "SCOPE_TOO_LARGE"],
@@ -67,7 +50,7 @@
       "input": {
         "required": ["specs/{feature}/spec.md"],
         "optional": ["memory.architectural_patterns"],
-        "max_tokens": 2000
+        "max_tokens": 4000
       },
       "output": {
         "artifacts": ["specs/{feature}/plan.md", "docs/adr/NNN-{decision-title}.md"]
@@ -107,49 +90,13 @@
       "failure_modes": ["DECOMPOSITION_TOO_GRANULAR", "MISSING_REQUIREMENT_COVERAGE"],
       "next": "implement"
     },
-    "spec-test": {
-      "agent": "spec-tester",
-      "model": "haiku",
-      "input": {
-        "required": ["specs/{feature}/spec.md", "specs/{feature}/tasks.md"],
-        "optional": [],
-        "max_tokens": 1500
-      },
-      "output": {
-        "artifacts": ["specs/{feature}/test-stubs.md", "SPEC_TEST_RESULT"]
-      },
-      "gate": {
-        "type": "mechanical",
-        "checks": ["test-stubs.md created", "SPEC_TEST_RESULT emitted"]
-      },
-      "failure_modes": ["SPEC_GAP_DETECTED"],
-      "next": "worktree"
-    },
-    "worktree": {
-      "agent": "worktree-manager",
-      "model": "sonnet",
-      "input": {
-        "required": [],
-        "optional": [],
-        "max_tokens": 0
-      },
-      "output": {
-        "artifacts": ["git_worktree"]
-      },
-      "gate": {
-        "type": "mechanical",
-        "checks": ["worktree created or skipped gracefully"]
-      },
-      "failure_modes": ["GIT_ERROR"],
-      "next": "implement"
-    },
     "implement": {
       "agent": "implementation-engine",
       "model": "sonnet",
       "input": {
         "required": ["specs/{feature}/tasks.md", "specs/{feature}/spec.md"],
         "optional": ["memory.project_conventions", "memory.learned_patterns"],
-        "max_tokens": 3000
+        "max_tokens": 5000
       },
       "output": {
         "artifacts": ["modified_and_created_files"]
@@ -203,7 +150,7 @@
       "input": {
         "required": ["specs/{feature}/spec.md", "accumulated_diff", "VERIFICATION_RESULT"],
         "optional": ["specs/{feature}/plan.md"],
-        "max_tokens": 4000
+        "max_tokens": 8000
       },
       "output": {
         "artifacts": ["REVIEW_RESULT"],
@@ -215,6 +162,8 @@
       "gate": {
         "type": "self",
         "pass_condition": "REVIEW_RESULT.decision == APPROVE",
+        "on_pass": "orchestrator calls sdd_transition(reviewing→pr_created)",
+        "on_fail": "orchestrator calls sdd_transition(reviewing→fix_review) then enters fix loop",
         "severity_handling": {
           "blocking": "gate fails, triggers fix loop",
           "warning": "logged, does not block"

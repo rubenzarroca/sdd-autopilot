@@ -23,6 +23,8 @@ import {
   handleMemoryWrite,
   handleTickDecay,
   handleAppendSignal,
+  handleUpdateTask,
+  handleUpdateFeature,
 } from "./handlers.js";
 
 // ─── Tool definitions (JSON Schema) ─────────────────────────────
@@ -220,6 +222,54 @@ const TOOLS = [
     },
   },
   {
+    name: "sdd_update_task",
+    description:
+      "Update the status of a task within a feature. Use status='completed' to mark a task done " +
+      "(required before transitioning to 'verifying'). Also supports 'pending' and 'in_progress'.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        project_path: { type: "string", description: "Absolute path to the project root" },
+        feature_id: { type: "string", description: "Feature identifier" },
+        task_id: { type: "string", description: "Task identifier (e.g. TASK-001)" },
+        status: {
+          type: "string",
+          enum: ["pending", "in-progress", "completed"],
+          description: "New task status",
+        },
+      },
+      required: ["project_path", "feature_id", "task_id", "status"],
+    },
+  },
+  {
+    name: "sdd_update_feature",
+    description:
+      "Persist feature metadata fields (plan_path, tasks_path, worktree_path, branch, blocked_reason, " +
+      "escalation_reason, awaiting_input_reason). Use instead of writing state.json directly.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        project_path: { type: "string", description: "Absolute path to the project root" },
+        feature_id: { type: "string", description: "Feature identifier" },
+        updates: {
+          type: "object",
+          description: "Fields to update (only provide the ones you want to change)",
+          properties: {
+            plan_path: { type: "string" },
+            tasks_path: { type: "string" },
+            worktree_path: { type: "string" },
+            branch: { type: "string" },
+            blocked_reason: { type: "string" },
+            escalation_reason: { type: "string" },
+            awaiting_input_reason: { type: "string" },
+          },
+          additionalProperties: false,
+        },
+      },
+      required: ["project_path", "feature_id", "updates"],
+    },
+  },
+  {
     name: "sdd_append_signal",
     description:
       "Append a typed signal to .sdd/runs/{feature_id}/signals.jsonl. Append-only.",
@@ -254,6 +304,8 @@ const HANDLER_MAP: Record<string, HandlerFn> = {
   sdd_memory_write: handleMemoryWrite,
   sdd_tick_decay: handleTickDecay,
   sdd_append_signal: handleAppendSignal,
+  sdd_update_task: handleUpdateTask,
+  sdd_update_feature: handleUpdateFeature,
 };
 
 // ─── Server setup ────────────────────────────────────────────────

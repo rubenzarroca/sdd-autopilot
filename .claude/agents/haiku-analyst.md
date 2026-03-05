@@ -1,7 +1,7 @@
 ---
 name: haiku-analyst
 description: Fast analysis agent for triage (pre-execution complexity estimation) and post-pipeline retrospective. Cheap and decisive. Use before specify for triage, or after merge for retro.
-model: claude-haiku-4-5-20251001
+model: haiku
 tools:
   - Read
   - Write

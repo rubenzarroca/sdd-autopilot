@@ -564,6 +564,62 @@ export async function handleTickDecay(params: {
   };
 }
 
+// ─── 12. sdd_update_task ─────────────────────────────────────────
+
+export async function handleUpdateTask(params: {
+  project_path: string;
+  feature_id: string;
+  task_id: string;
+  status: "pending" | "in-progress" | "completed";
+}): Promise<unknown> {
+  const sm = new StateManager(params.project_path);
+  const feature = await sm.getFeature(params.feature_id);
+
+  if (!feature) {
+    return { error: `Feature "${params.feature_id}" not found` };
+  }
+  if (!feature.tasks[params.task_id]) {
+    return { error: `Task "${params.task_id}" not found. Available: ${Object.keys(feature.tasks).join(", ")}` };
+  }
+
+  if (params.status === "completed") {
+    await sm.markTaskCompleted(params.feature_id, params.task_id);
+  } else {
+    const state = await sm.read();
+    const t = state.features[params.feature_id].tasks[params.task_id];
+    t.status = params.status;
+    await sm.write(state);
+  }
+
+  return { updated: true, task_id: params.task_id, status: params.status };
+}
+
+// ─── 13. sdd_update_feature ──────────────────────────────────────
+
+export async function handleUpdateFeature(params: {
+  project_path: string;
+  feature_id: string;
+  updates: Partial<{
+    plan_path: string;
+    tasks_path: string;
+    worktree_path: string;
+    branch: string;
+    blocked_reason: string;
+    escalation_reason: string;
+    awaiting_input_reason: string;
+  }>;
+}): Promise<unknown> {
+  const sm = new StateManager(params.project_path);
+  const feature = await sm.getFeature(params.feature_id);
+
+  if (!feature) {
+    return { error: `Feature "${params.feature_id}" not found` };
+  }
+
+  await sm.updateFeatureField(params.feature_id, params.updates);
+  return { updated: true, fields: Object.keys(params.updates) };
+}
+
 // ─── 11. sdd_append_signal ───────────────────────────────────────
 // Dual-write: state.json (for sdd_get_state visibility) + signals.jsonl (audit trail).
 

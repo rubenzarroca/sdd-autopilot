@@ -1,7 +1,7 @@
 ---
 name: pr-creator
 description: Creates a PR after review approval. Commits staged changes, pushes branch, opens PR with structured metadata. Use after adversarial-reviewer produces APPROVE.
-model: claude-sonnet-4-6
+model: sonnet
 tools:
   - Read
   - Bash

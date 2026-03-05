@@ -1,7 +1,7 @@
 ---
 name: opus-coach
 description: Senior Opus reviewer that coaches Sonnet agents. Reviews artifacts adversarially and provides structured feedback with severity ratings. Read-only, never modifies artifacts directly.
-model: claude-opus-4-6
+model: opus
 tools:
   - Read
   - Grep
