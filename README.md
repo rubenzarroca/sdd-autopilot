@@ -206,19 +206,29 @@ sdd-autopilot/
 │   ├── auto-init/SKILL.md   # /sdd-auto:init
 │   └── auto-status/SKILL.md # /sdd-auto:status
 │
-└── engine/                  # MCP server (TypeScript, stdio transport)
-    ├── src/
-    │   ├── index.ts         # Entry point — 13 sdd_* tools registered
-    │   ├── handlers.ts      # Deterministic tool handlers
-    │   ├── state.ts         # StateManager + AGENT_PERMISSIONS governance
-    │   ├── memory.ts        # Two-layer memory (project + user scope)
-    │   ├── tasks.ts         # parseTasks() + computeWaves()
-    │   ├── observability.ts # RunLogger
-    │   ├── types.ts         # Shared types
-    │   └── contracts.json   # Pipeline phase definitions (single source of truth)
-    ├── test-e2e.mjs         # Mechanical tests (105 assertions, no API calls)
-    ├── package.json
-    └── tsconfig.json
+├── docs/
+│   └── examples/
+│       └── health-check-endpoint/  # Real pipeline run — spec · plan · tasks · ADR · run log
+│
+├── engine/                  # MCP server (TypeScript, stdio transport)
+│   ├── src/
+│   │   ├── index.ts         # Entry point — 13 sdd_* tools registered
+│   │   ├── handlers.ts      # Deterministic tool handlers
+│   │   ├── state.ts         # StateManager + AGENT_PERMISSIONS governance
+│   │   ├── memory.ts        # Two-layer memory (project + user scope)
+│   │   ├── tasks.ts         # parseTasks() + computeWaves()
+│   │   ├── observability.ts # RunLogger
+│   │   ├── types.ts         # Shared types
+│   │   └── contracts.json   # Pipeline phase definitions (single source of truth)
+│   ├── test-e2e.mjs         # Mechanical tests (105 assertions, no API calls)
+│   ├── package.json
+│   └── tsconfig.json
+│
+└── .sdd/                    # Runtime state — gitignored, auto-created per project
+    ├── state.json           # Feature states + task list + signals
+    ├── memory.md            # Two-layer memory (project + user scope)
+    ├── runs/                # Audit trail (sdd_log_event output)
+    └── specs/               # spec.md · plan.md · tasks.md per feature
 ```
 
 ## MCP tools
@@ -278,7 +288,7 @@ Autonomously generates spec → plan → tasks → implements all tasks → veri
 /sdd-auto:init
 ```
 
-Creates `.sdd/state.json`. Optional — `/sdd-auto:run` auto-initializes if needed.
+Creates `.sdd/state.json` in your project root. Optional — `/sdd-auto:run` auto-initializes if needed. `.sdd/` is gitignored by design; it holds runtime state, not source code.
 
 ### `/sdd-auto:status` — Check pipeline progress
 
