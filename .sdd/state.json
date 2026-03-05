@@ -1,0 +1,116 @@
+{
+  "version": "2.0.0",
+  "project": "sdd-autopilot",
+  "initialized_at": "2026-03-05T00:00:00.000Z",
+  "active_feature": null,
+  "features": {
+    "health-check-endpoint": {
+      "state": "merged",
+      "spec_path": "specs/health-check-endpoint/spec.md",
+      "transitions": [
+        {
+          "from": "draft",
+          "to": "specified",
+          "at": "2026-03-05T13:15:38.076Z",
+          "command": "transition",
+          "agent": "spec-generator"
+        },
+        {
+          "from": "specified",
+          "to": "planned",
+          "at": "2026-03-05T13:18:16.887Z",
+          "command": "transition",
+          "agent": "plan-architect"
+        },
+        {
+          "from": "planned",
+          "to": "decomposed",
+          "at": "2026-03-05T13:19:58.014Z",
+          "command": "transition",
+          "agent": "task-decomposer"
+        },
+        {
+          "from": "decomposed",
+          "to": "implementing",
+          "at": "2026-03-05T13:20:50.109Z",
+          "command": "transition",
+          "agent": "implementation-engine"
+        },
+        {
+          "from": "implementing",
+          "to": "implementing",
+          "at": "2026-03-05T13:21:29.694Z",
+          "command": "transition",
+          "agent": "implementation-engine"
+        },
+        {
+          "from": "implementing",
+          "to": "implementing",
+          "at": "2026-03-05T13:22:13.742Z",
+          "command": "transition",
+          "agent": "implementation-engine"
+        },
+        {
+          "from": "implementing",
+          "to": "implementing",
+          "at": "2026-03-05T13:23:52.564Z",
+          "command": "transition",
+          "agent": "implementation-engine"
+        },
+        {
+          "from": "implementing",
+          "to": "verifying",
+          "at": "2026-03-05T13:24:04.967Z",
+          "command": "transition",
+          "agent": "verification-engine"
+        },
+        {
+          "from": "verifying",
+          "to": "reviewing",
+          "at": "2026-03-05T13:26:58.569Z",
+          "command": "transition",
+          "agent": "verification-engine"
+        },
+        {
+          "from": "reviewing",
+          "to": "pr_created",
+          "at": "2026-03-05T13:27:45.667Z",
+          "command": "transition",
+          "agent": "adversarial-reviewer"
+        },
+        {
+          "from": "pr_created",
+          "to": "merged",
+          "at": "2026-03-05T13:30:04.319Z",
+          "command": "{\"pr_url\":\"https://github.com/rubenzarroca/sdd-autopilot/pull/1\",\"diff_stats\":\"9 files changed, 447 insertions(+), 1 deletion(-)\"}",
+          "agent": "pr-creator"
+        }
+      ],
+      "tasks": {
+        "TASK-001": {
+          "status": "completed",
+          "completed_at": "2026-03-05T13:20:47.679Z"
+        },
+        "TASK-002": {
+          "status": "completed",
+          "completed_at": "2026-03-05T13:21:25.899Z"
+        },
+        "TASK-003": {
+          "status": "completed",
+          "completed_at": "2026-03-05T13:22:10.049Z"
+        },
+        "TASK-004": {
+          "status": "completed",
+          "completed_at": "2026-03-05T13:23:46.313Z"
+        }
+      },
+      "signals": [],
+      "verification_attempts": 1,
+      "review_attempts": 1,
+      "fix_loop_attempts": 0,
+      "fix_review_attempts": 0,
+      "plan_path": "specs/health-check-endpoint/plan.md",
+      "tasks_path": "specs/health-check-endpoint/tasks.md"
+    }
+  }
+}

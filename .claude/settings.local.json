@@ -1,0 +1,6 @@
+{
+  "enabledMcpjsonServers": [
+    "sdd-autopilot"
+  ],
+  "enableAllProjectMcpServers": true
+}
