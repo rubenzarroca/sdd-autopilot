@@ -17,3 +17,6 @@ Thumbs.db
 .idea/
 *.swp
 *.swo
+
+# SDD runtime state (generated per-project at runtime)
+.sdd/
