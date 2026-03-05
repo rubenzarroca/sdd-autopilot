@@ -173,7 +173,7 @@ Transition graph enforced in code (`AGENT_PERMISSIONS` in `engine/src/state.ts`)
                         │  escalated  ← orchestrator, any state    │
                         └──────────────────────────────────────────┘
 
- draft ──▶ specified ──▶ planned ──▶ decomposed ──▶ implementing ──▶ verifying ──▶ reviewing ──▶ pr_created ──▶ merged
+ draft ──▶ specified ──▶ planned ──▶ decomposed ──▶ implementing ──▶ verifying ──▶ reviewing ──▶ pr_created
                                           │               │               │
                                           ▼               ▼               ▼
                                        blocked          fix_loop       fix_review
@@ -223,12 +223,6 @@ sdd-autopilot/
 │   ├── test-e2e.mjs         # Mechanical tests (105 assertions, no API calls)
 │   ├── package.json
 │   └── tsconfig.json
-│
-└── .sdd/                    # Runtime state — gitignored, auto-created per project
-    ├── state.json           # Feature states + task list + signals
-    ├── memory.md            # Two-layer memory (project + user scope)
-    ├── runs/                # Audit trail (sdd_log_event output)
-    └── specs/               # spec.md · plan.md · tasks.md per feature
 ```
 
 ## MCP tools
