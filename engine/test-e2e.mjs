@@ -1,4 +1,4 @@
-// E2E mechanical test — verifies all 11 sdd_* MCP tool handlers without calling any LLM
+// E2E mechanical test — verifies all 14 sdd_* MCP tool handlers without calling any LLM
 // Tests: state management, governance, contracts, gates, failure classification, delta check, memory, signals
 
 import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from "node:fs";
@@ -26,6 +26,7 @@ import {
   handleAppendSignal,
   handleUpdateTask,
   handleUpdateFeature,
+  handleHealth,
 } from "./build/handlers.js";
 
 let passed = 0;
@@ -510,6 +511,28 @@ assert("happy path: sdd_update_task unknown task returns error", typeof h.error 
 
 h = await handleUpdateFeature({ project_path: projectPath, feature_id: "nonexistent-feature", updates: { branch: "test" } });
 assert("happy path: sdd_update_feature unknown feature returns error", typeof h.error === "string");
+
+// ── Test 13: sdd_health ───────────────────────────────────────────
+console.log("\n=== Test 13: sdd_health ===");
+
+const pkgVersion = JSON.parse(readFileSync("engine/package.json", "utf-8")).version;
+
+// Basic happy path
+h = await handleHealth({});
+assert("health status is ok (REQ-001)", h.status === "ok");
+assert("health uptime_seconds is non-negative integer (REQ-002, REQ-008)", Number.isInteger(h.uptime_seconds) && h.uptime_seconds >= 0);
+assert("health version matches package.json (REQ-003)", h.version === pkgVersion);
+assert("health response has exactly 3 keys (REQ-009)", Object.keys(h).length === 3);
+
+// EC-001: extra args ignored, same shape returned
+h = await handleHealth({ foo: "bar" });
+assert("health with extra args returns same shape (EC-001)", h.status === "ok" && Number.isInteger(h.uptime_seconds) && h.version === pkgVersion && Object.keys(h).length === 3);
+
+// EC-002: two sequential calls — both valid, second uptime >= first
+const first = await handleHealth({});
+const second = await handleHealth({});
+assert("health two sequential calls both valid (EC-002)", first.status === "ok" && second.status === "ok");
+assert("health second uptime_seconds >= first (EC-002)", second.uptime_seconds >= first.uptime_seconds);
 
 // ── Cleanup ───────────────────────────────────────────────────────
 try {

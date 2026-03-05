@@ -27,6 +27,10 @@ try {
   contracts = JSON.parse(readFileSync(altPath, "utf-8")) as PipelineContracts;
 }
 
+const ENGINE_VERSION: string = JSON.parse(
+  readFileSync(resolve(__dirname, "..", "package.json"), "utf-8"),
+).version;
+
 // ─── Helper: file exists check ────────────────────────────────────
 
 async function fileExists(path: string): Promise<boolean> {
@@ -660,4 +664,10 @@ export async function handleAppendSignal(params: {
   await appendFile(signalsPath, JSON.stringify(entry) + "\n", "utf-8");
 
   return { appended: true, signal_id: signalId, in_state: stateResult.ok };
+}
+
+// ─── 14. sdd_health ──────────────────────────────────────────────
+
+export async function handleHealth(_params: Record<string, unknown>): Promise<unknown> {
+  return { status: "ok", uptime_seconds: Math.floor(process.uptime()), version: ENGINE_VERSION };
 }

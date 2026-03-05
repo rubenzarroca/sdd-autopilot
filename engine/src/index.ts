@@ -25,6 +25,7 @@ import {
   handleAppendSignal,
   handleUpdateTask,
   handleUpdateFeature,
+  handleHealth,
 } from "./handlers.js";
 
 // ─── Tool definitions (JSON Schema) ─────────────────────────────
@@ -286,6 +287,15 @@ const TOOLS = [
       required: ["project_path", "feature_id", "from_agent", "signal_type", "message"],
     },
   },
+  {
+    name: "sdd_health",
+    description: "Return MCP server health status: uptime in seconds and engine version.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {},
+      required: [],
+    },
+  },
 ];
 
 // ─── Tool dispatcher ─────────────────────────────────────────────
@@ -306,6 +316,7 @@ const HANDLER_MAP: Record<string, HandlerFn> = {
   sdd_append_signal: handleAppendSignal,
   sdd_update_task: handleUpdateTask,
   sdd_update_feature: handleUpdateFeature,
+  sdd_health: handleHealth,
 };
 
 // ─── Server setup ────────────────────────────────────────────────
