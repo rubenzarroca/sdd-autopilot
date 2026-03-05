@@ -11,51 +11,122 @@ Feature description
        │
        ▼
 ┌─────────────┐
-│   SPECIFY   │ Sonnet 4.6 — generates spec.md from description
+│   TRIAGE    │ Haiku — complexity + risk pre-check
 ├─────────────┤
-│    PLAN     │ Sonnet 4.6 — technical plan + ADR
+│   SPECIFY   │ Sonnet — spec.md with requirements and edge cases
+│             │ ✦ opus-coach pair review
 ├─────────────┤
-│    TASKS    │ Sonnet 4.6 — atomic task decomposition
+│    PLAN     │ Sonnet — technical plan + ADR
 ├─────────────┤
-│  IMPLEMENT  │ Sonnet 4.6 — executes all tasks in order
+│    TASKS    │ Sonnet — atomic task list with DAG dependencies
 ├─────────────┤
-│   VERIFY    │ Sonnet 4.6 — tests, spec coverage, regression
-│             │ ↻ fix loop (up to 3 attempts)
+│  IMPLEMENT  │ Sonnet — executes tasks in parallel waves
+│             │ ✦ opus-coach pair review per task
 ├─────────────┤
-│   REVIEW    │ Opus 4.6 — adversarial code review
+│   VERIFY    │ Sonnet — tests, spec coverage, regression check
+│             │ ↻ fix loop (up to 3 attempts, with delta check)
+│             │ ✦ opus-coach pair review
+├─────────────┤
+│   REVIEW    │ Opus — adversarial review, defaults to REJECT
 │             │ ↻ fix loop (up to 2 attempts)
 ├─────────────┤
-│     PR      │ git worktree → commit → push → gh pr create
+│     PR      │ Sonnet — branch push + gh pr create
 └─────────────┘
        │
        ▼
   Reviewed PR
 ```
 
-Sonnet handles the bulk work (planning, implementation, verification). Opus acts as the final quality gate — adversarial reviewer that defaults to REJECT.
+Sonnet handles the bulk work. Opus acts as the adversarial quality gate. Haiku runs triage and post-pipeline retrospectives. Each phase is a dedicated native Claude Code subagent — no direct API calls.
+
+## Architecture
+
+This plugin is built on two layers:
+
+**MCP server** (`engine/`) — a deterministic Node.js stdio server exposing 11 `sdd_*` tools. No LLM calls. Pure state management, gate evaluation, memory, signals, and observability.
+
+**Claude Code subagents** (`.claude/agents/`) — 10 native subagents invoked by the orchestrator skill. Each has a defined model, tool access, and mission. The orchestrator (`/sdd-auto:run`) coordinates them via MCP tools and the `Agent` tool.
+
+```
+sdd-autopilot/
+├── .claude-plugin/
+│   ├── plugin.json          # Plugin manifest + mcpServers declaration
+│   └── marketplace.json     # Distribution metadata
+├── .claude/
+│   └── agents/              # Native Claude Code subagents
+│       ├── spec-generator.md
+│       ├── plan-architect.md
+│       ├── task-decomposer.md
+│       ├── implementation-engine.md
+│       ├── verification-engine.md
+│       ├── adversarial-reviewer.md
+│       ├── opus-coach.md
+│       ├── haiku-analyst.md
+│       ├── haiku-validator.md
+│       └── pr-creator.md
+├── skills/
+│   ├── auto-run/SKILL.md    # /sdd-auto:run — orchestrator
+│   ├── auto-init/SKILL.md   # /sdd-auto:init
+│   └── auto-status/SKILL.md # /sdd-auto:status
+└── engine/                  # MCP server (TypeScript)
+    ├── src/
+    │   ├── index.ts         # MCP server entry (stdio transport, 11 tools)
+    │   ├── handlers.ts      # Deterministic tool handlers
+    │   ├── state.ts         # StateManager + AGENT_PERMISSIONS governance
+    │   ├── memory.ts        # Two-layer memory (project + user)
+    │   ├── types.ts         # Shared types
+    │   └── contracts.json   # Pipeline phase definitions (single source of truth)
+    ├── test-e2e.mjs         # Mechanical tests (92 assertions, no API calls)
+    ├── package.json
+    └── tsconfig.json
+```
+
+### MCP tools
+
+| Tool | Purpose |
+|------|---------|
+| `sdd_get_state` | Read current feature state and signals |
+| `sdd_transition` | Move a feature between states (enforces AGENT_PERMISSIONS) |
+| `sdd_get_contract` | Read phase definition from contracts.json |
+| `sdd_evaluate_gate` | Mechanical gate checks (file exists, section non-empty, etc.) |
+| `sdd_classify_failure` | Classify error as implementation_bug / spec_gap / infra_issue |
+| `sdd_delta_check` | Detect regression in fix loop (abort if failures increase) |
+| `sdd_log_event` | Append structured event to `.sdd/runs/{feature}/run.log` |
+| `sdd_memory_read` | Read project or user memory by section |
+| `sdd_memory_write` | Write to project or user memory |
+| `sdd_tick_decay` | Decrement TTLs on learned patterns and exploration entries |
+| `sdd_append_signal` | Emit a signal (dual-write: state.json + signals.jsonl) |
+
+### State machine
+
+Transition graph enforced in code (`AGENT_PERMISSIONS` in `engine/src/state.ts`), not in `state.json`:
+
+```
+draft → specified → planned → decomposed → implementing → verifying → reviewing → pr_created → merged
+                                                ↕               ↕            ↕
+                                           fix_loop       awaiting_input  fix_review
+                                           blocked
+                                           escalated  ← orchestrator can reach from any state
+```
 
 ## Installation
 
-### From source (local plugin)
+### From Claude Code marketplace
+
+Search for `sdd-autopilot` in the Claude Code plugin marketplace and install. The MCP server starts automatically — no configuration needed.
+
+### From source
 
 ```bash
-# Clone into Claude Code plugins directory
 git clone https://github.com/rubenzarroca/sdd-autopilot.git \
   ~/.claude/plugins/local/sdd-autopilot
 
-# Build the engine
 cd ~/.claude/plugins/local/sdd-autopilot/engine
 npm install
 npm run build
 ```
 
-### Environment
-
-```bash
-export ANTHROPIC_API_KEY="sk-ant-..."
-```
-
-The engine calls the Anthropic API directly via PTC (Programmatic Tool Calling). The SDK reads `ANTHROPIC_API_KEY` from the environment automatically.
+No `ANTHROPIC_API_KEY` needed. Claude Code handles all model invocations through its native agent system.
 
 ## Usage
 
@@ -65,19 +136,11 @@ The engine calls the Anthropic API directly via PTC (Programmatic Tool Calling).
 /sdd-auto:run "Add a health check endpoint that returns server status and uptime"
 ```
 
-This will autonomously:
-1. Generate a spec at `specs/health-check-endpoint/spec.md`
-2. Create a technical plan and ADR
-3. Decompose into atomic tasks
-4. Create a git worktree + branch `feat/health-check-endpoint`
-5. Implement all tasks
-6. Verify (tests pass, spec coverage >= 80%, no regressions)
-7. Adversarial review (correctness, security, performance, maintainability, side effects)
-8. Create a PR with the spec as body
+Autonomously generates spec → plan → tasks → implements all tasks → verifies → reviews → opens PR.
 
 **Flags:**
-- `--skip-worktree` — Work in place (no git worktree)
-- `--skip-pr` — Skip PR creation
+- `--skip-worktree` — Work in place, no git worktree
+- `--skip-pr` — Skip PR creation (useful for testing)
 
 ### `/sdd-auto:init` — Initialize a project
 
@@ -85,68 +148,21 @@ This will autonomously:
 /sdd-auto:init
 ```
 
-Creates `.sdd/state.json` with the autopilot state machine. Optional — `/sdd-auto:run` auto-initializes if needed.
+Creates `.sdd/state.json`. Optional — `/sdd-auto:run` auto-initializes if needed.
 
-### `/sdd-auto:status` — Check progress
+### `/sdd-auto:status` — Check pipeline progress
 
 ```
 /sdd-auto:status
 ```
 
-Shows feature states, task progress, verification/review attempt counts.
-
-## Architecture
-
-```
-sdd-autopilot/
-├── .claude-plugin/
-│   ├── plugin.json          # Plugin manifest
-│   └── marketplace.json     # Distribution metadata
-├── skills/
-│   ├── auto-run/SKILL.md    # /sdd-auto:run skill
-│   ├── auto-init/SKILL.md   # /sdd-auto:init skill
-│   └── auto-status/SKILL.md # /sdd-auto:status skill
-└── engine/                  # PTC pipeline engine (TypeScript)
-    ├── src/
-    │   ├── index.ts         # CLI entry + pipeline orchestrator
-    │   ├── phase.ts         # PTC agentic loop runner
-    │   ├── types.ts         # Shared types, models, pricing
-    │   ├── state.ts         # .sdd/state.json state machine
-    │   ├── git.ts           # Worktree + PR operations
-    │   ├── tools.ts         # PTC tool definitions (9 tools)
-    │   ├── handlers.ts      # Tool execution handlers
-    │   └── prompts/         # Phase-specific system prompts
-    │       ├── specify.ts
-    │       ├── plan.ts
-    │       ├── tasks.ts
-    │       ├── implement.ts
-    │       ├── verify.ts
-    │       ├── review.ts
-    │       └── fix.ts
-    ├── test-e2e.mjs         # Mechanical tests (no API calls)
-    ├── package.json
-    └── tsconfig.json
-```
-
-The engine is a **single Node.js process** that runs sequential PTC agentic loops — one per phase. No multi-agent coordination. Each phase gets its own system prompt, model, and tool set.
-
-## Cost estimation
-
-Per feature (typical):
-
-| Model | Role | Est. cost |
-|-------|------|-----------|
-| Sonnet 4.6 | Specify + Plan + Tasks + Implement + Verify + Fix | ~$1.41 |
-| Opus 4.6 | Review + Fix review | ~$2.63 |
-| **Total** | | **~$4.04** |
-
-Pricing: Sonnet ($3/$15 per 1M in/out) · Opus ($15/$75 per 1M in/out)
+Shows feature states, task progress, verification/review attempt counts, active signals.
 
 ## Requirements
 
-- Node.js 18+
-- `git` and `gh` (GitHub CLI) for worktree + PR creation
-- `ANTHROPIC_API_KEY` environment variable
+- Claude Code with plugin support
+- Node.js 18+ (for the MCP server)
+- `git` and `gh` (GitHub CLI) for branch push + PR creation
 
 ## Testing
 
@@ -154,9 +170,10 @@ Pricing: Sonnet ($3/$15 per 1M in/out) · Opus ($15/$75 per 1M in/out)
 cd engine
 npm run build
 node test-e2e.mjs
+# → 92/92 PASS
 ```
 
-Runs 36 assertions covering state management, prompt generation, tool definitions, handler execution, and result parsing — all without calling the Anthropic API.
+92 assertions covering all 11 MCP tool handlers, state machine boundaries, memory, signal routing, gate evaluation, delta check, and observability — all without any API calls.
 
 ## License
 
