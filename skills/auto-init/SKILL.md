@@ -25,19 +25,11 @@ Create the minimal SDD state file for a project.
   "project": "{project-name}",
   "initialized_at": "{ISO timestamp}",
   "active_feature": null,
-  "features": {},
-  "allowed_transitions": {
-    "drafting": ["specified"],
-    "specified": ["planned"],
-    "planned": ["tasked"],
-    "tasked": ["implementing"],
-    "implementing": ["verifying"],
-    "verifying": ["reviewing", "implementing"],
-    "reviewing": ["completed", "implementing"],
-    "completed": []
-  }
+  "features": {}
 }
 ```
+
+Do NOT add `allowed_transitions`. The transition graph lives in the MCP server (`AGENT_PERMISSIONS` in engine/src/state.ts), not in state.json.
 
 4. Report success: "Project initialized for SDD Autopilot at {path}. Run `/sdd-auto:run \"feature description\"` to start."
 
@@ -45,6 +37,6 @@ Create the minimal SDD state file for a project.
 
 - The project name is derived from the directory name.
 - No constitution.md or PRD is required — the autopilot works without them but produces better specs when they exist.
-- If the user also has the original sdd-plugin, both can coexist. The state.json format is compatible (autopilot adds verifying/reviewing states).
+- Feature states used by v2: `draft`, `specified`, `planned`, `decomposed`, `implementing`, `verifying`, `reviewing`, `pr_created`, `merged`, `fix_loop`, `fix_review`, `awaiting_input`, `blocked`, `escalated`.
 
 $ARGUMENTS

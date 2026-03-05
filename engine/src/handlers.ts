@@ -476,8 +476,15 @@ export async function handleMemoryRead(params: {
       scope: "user",
     };
   }
+  // Map project-scope section names to UserMemory fields
+  const userSectionMap: Record<string, keyof typeof mem> = {
+    learned_patterns:     "crossProjectPatterns",
+    project_conventions:  "designHeuristics",
+    run_history:          "agentPerformanceLog",
+  };
+  const field = userSectionMap[params.section as string];
   return {
-    content: JSON.stringify(mem),
+    content: field ? mem[field] : JSON.stringify(mem),
     section: params.section,
     scope: "user",
   };
@@ -500,7 +507,7 @@ export async function handleMemoryWrite(params: {
     mm.initProjectMemory("project", "");
 
     if (params.section === "learned_patterns") {
-      mm.appendLearnedPatterns([params.content], params.ttl);
+      mm.appendLearnedPatterns([params.content], undefined, params.ttl ?? 15);
     } else if (params.section === "run_history") {
       // Append raw content to run history
       const content = readFileSync(mm.projectMemoryPath, "utf-8");
@@ -528,6 +535,8 @@ export async function handleMemoryWrite(params: {
     } else if (params.section === "agent_performance") {
       // Extract agent name from content or use generic
       mm.appendAgentPerformanceNote("unknown", params.content);
+    } else {
+      return { written: false, reason: `Section "${params.section}" is not supported for user scope. Use "cross_project_patterns" or "agent_performance".` };
     }
   }
 
@@ -556,6 +565,7 @@ export async function handleTickDecay(params: {
 }
 
 // ─── 11. sdd_append_signal ───────────────────────────────────────
+// Dual-write: state.json (for sdd_get_state visibility) + signals.jsonl (audit trail).
 
 export async function handleAppendSignal(params: {
   project_path: string;
@@ -568,10 +578,20 @@ export async function handleAppendSignal(params: {
   const runDir = resolve(params.project_path, ".sdd", "runs", params.feature_id);
   await mkdir(runDir, { recursive: true });
 
-  const signalsPath = join(runDir, "signals.jsonl");
-  const signalId = randomUUID();
+  // Write to state.json via StateManager (makes signals visible in sdd_get_state)
+  const sm = new StateManager(params.project_path);
+  const stateResult = await sm.appendSignal(
+    params.feature_id,
+    params.from_agent as AgentId,
+    params.signal_type as import("./types.js").SignalType,
+    { message: params.message, severity: params.severity ?? "info" },
+  );
+
+  const signalId = stateResult.ok ? stateResult.signal.id : randomUUID();
   const timestamp = new Date().toISOString();
 
+  // Also write to signals.jsonl (append-only audit trail)
+  const signalsPath = join(runDir, "signals.jsonl");
   const entry = {
     signal_id: signalId,
     from_agent: params.from_agent,
@@ -583,5 +603,5 @@ export async function handleAppendSignal(params: {
 
   await appendFile(signalsPath, JSON.stringify(entry) + "\n", "utf-8");
 
-  return { appended: true, signal_id: signalId };
+  return { appended: true, signal_id: signalId, in_state: stateResult.ok };
 }

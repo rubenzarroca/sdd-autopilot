@@ -130,8 +130,8 @@ ${conventionsContent.trim()}
 
   // ─── Append ───────────────────────────────────────────────────
 
-  // currentRun: when provided, stores TTL metadata for decay (11.4). Omit for backward compat (date format, no decay).
-  appendLearnedPatterns(patterns: string[], currentRun?: number): void {
+  // currentRun: run number for audit trail. ttl: decay counter (default 15). Omit both for date-only format (no decay).
+  appendLearnedPatterns(patterns: string[], currentRun?: number, ttl: number = 15): void {
     if (patterns.length === 0 || !existsSync(this.projectMemoryPath)) return;
     const content = readFileSync(this.projectMemoryPath, "utf-8");
     const existing = this.extractSection(content, "Learned Patterns");
@@ -140,7 +140,7 @@ ${conventionsContent.trim()}
     const newEntries = patterns.map((p, i) => {
       const id = String(currentCount + i + 1).padStart(3, "0");
       // TTL format when run is known; date-only format for legacy callers (no decay applied)
-      const tag = currentRun !== undefined ? `added_run=${currentRun}, ttl=15` : date;
+      const tag = currentRun !== undefined ? `added_run=${currentRun}, ttl=${ttl}` : date;
       return `<!-- PATTERN-${id}: ${tag} -->\n${p.trim()}`;
     }).join("\n\n");
     const body = existing.startsWith("(no patterns") ? newEntries : `${existing.trim()}\n\n${newEntries}`;

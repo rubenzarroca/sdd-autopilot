@@ -1,6 +1,6 @@
 {
   "name": "sdd-autopilot",
-  "description": "SDD Autopilot — Zero-stop, fully autonomous specify → plan → tasks → implement → verify → review → PR pipeline. Uses PTC (Programmatic Tool Calling) for agentic phases.",
+  "description": "SDD Autopilot — Zero-stop, fully autonomous specify → plan → tasks → implement → verify → review → PR pipeline. MCP server + native Claude Code subagents, no direct API calls.",
   "author": {
     "name": "Rubén Zarroca"
   },
@@ -8,5 +8,12 @@
     "./skills/auto-run",
     "./skills/auto-init",
     "./skills/auto-status"
-  ]
+  ],
+  "mcpServers": {
+    "sdd-autopilot": {
+      "command": "node",
+      "args": ["engine/build/index.js"],
+      "type": "stdio"
+    }
+  }
 }

@@ -8,7 +8,7 @@
   "plugins": [
     {
       "name": "sdd-autopilot",
-      "description": "SDD Autopilot — Zero-stop, fully autonomous specify → plan → tasks → implement → verify → review → PR pipeline. Uses PTC (Programmatic Tool Calling) with cost-optimized model routing: Sonnet for bulk work, Opus as adversarial reviewer.",
+      "description": "SDD Autopilot — Zero-stop, fully autonomous specify → plan → tasks → implement → verify → review → PR pipeline. MCP server + native Claude Code subagents, cost-optimized model routing: Sonnet for bulk work, Opus as adversarial reviewer.",
       "author": {
         "name": "Rubén Zarroca"
       },

@@ -21,7 +21,7 @@
       "next": "triage"
     },
     "triage": {
-      "agent": "triage-engine",
+      "agent": "haiku-analyst",
       "model": "haiku",
       "input": {
         "required": ["feature_description", "specs/{feature}/codebase-map.md"],
@@ -62,7 +62,7 @@
       "next": "plan"
     },
     "plan": {
-      "agent": "plan-generator",
+      "agent": "plan-architect",
       "model": "sonnet",
       "input": {
         "required": ["specs/{feature}/spec.md"],
@@ -105,7 +105,7 @@
         ]
       },
       "failure_modes": ["DECOMPOSITION_TOO_GRANULAR", "MISSING_REQUIREMENT_COVERAGE"],
-      "next": "spec-test"
+      "next": "implement"
     },
     "spec-test": {
       "agent": "spec-tester",
@@ -228,7 +228,7 @@
       "next": "pr"
     },
     "pr": {
-      "agent": "git-operator",
+      "agent": "pr-creator",
       "model": "sonnet",
       "input": {
         "required": ["specs/{feature}/spec.md", "accumulated_diff", "REVIEW_RESULT"],
