@@ -1,7 +1,7 @@
 {
   "name": "sdd-autopilot-engine",
   "version": "1.0.0",
-  "description": "SDD Autopilot PTC pipeline engine",
+  "description": "SDD Autopilot MCP server engine",
   "type": "module",
   "main": "build/index.js",
   "bin": {
@@ -13,7 +13,7 @@
     "start": "node build/index.js"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.39.0"
+    "@modelcontextprotocol/sdk": "^1.12.1"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

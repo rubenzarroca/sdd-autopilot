@@ -23,13 +23,12 @@ export type FeatureState =
 
 export type AgentId =
   | "spec-generator"
-  | "plan-generator"
+  | "plan-architect"
   | "task-decomposer"
   | "implementation-engine"
   | "verification-engine"
-  | "fix-engine"
   | "adversarial-reviewer"
-  | "git-operator"
+  | "pr-creator"
   | "haiku-validator"
   | "orchestrator";
 

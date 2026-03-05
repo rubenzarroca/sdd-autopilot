@@ -29,7 +29,7 @@ export const AGENT_PERMISSIONS: Record<AgentId, TransitionEdge[]> = {
     { from: "draft",          to: "awaiting_input" },   // spec too ambiguous
     { from: "awaiting_input", to: "specified" },         // re-specify after human input
   ],
-  "plan-generator": [
+  "plan-architect": [
     { from: "specified",      to: "planned" },
   ],
   "task-decomposer": [
@@ -48,15 +48,11 @@ export const AGENT_PERMISSIONS: Record<AgentId, TransitionEdge[]> = {
     { from: "verifying",      to: "awaiting_input" },    // SPEC_GAP detected
     { from: "verifying",      to: "reviewing" },         // PASS
   ],
-  "fix-engine": [
-    { from: "fix_loop",       to: "implementing" },
-    { from: "fix_review",     to: "implementing" },
-  ],
   "adversarial-reviewer": [
     { from: "reviewing",      to: "pr_created" },        // APPROVE
     { from: "reviewing",      to: "fix_review" },        // REQUEST_CHANGES
   ],
-  "git-operator": [
+  "pr-creator": [
     { from: "pr_created",     to: "merged" },
   ],
   // haiku-validator: semantic gate checks only — no state transitions
