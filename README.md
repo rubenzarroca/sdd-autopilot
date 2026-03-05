@@ -41,19 +41,155 @@ Sonnet handles the bulk work. Opus acts as the adversarial quality gate. Haiku r
 
 ## Architecture
 
-This plugin is built on two layers:
+```
+USER (Claude Code CLI)
+       │
+       │  /sdd-auto:init · /sdd-auto:run "feature" · /sdd-auto:status
+       ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                   SKILL LAYER  (skills/)                        │
+│         auto-init · auto-run (orchestrator) · auto-status       │
+└──────────────────────────┬──────────────────────────────────────┘
+                           │  Agent tool (spawns subagents)
+                           ▼
+┌─────────────────────────────────────────────────────────────────┐
+│          ORCHESTRATOR  (skills/auto-run/SKILL.md)               │
+│                                                                 │
+│  For each phase:                                                │
+│  1. sdd_get_state → sdd_get_contract → sdd_memory_read          │
+│  2. Spawn subagent                                              │
+│  3. sdd_evaluate_gate                                           │
+│  4a. gate=mechanical|haiku-validator → sdd_transition (generic) │
+│  4b. gate=self (verify/review) → read structured output:        │
+│       VERIFICATION_RESULT.status = PASS → verifying→reviewing   │
+│       REVIEW_RESULT.decision = APPROVE  → reviewing→pr_created  │
+│       REVIEW_RESULT.decision = REQUEST_CHANGES → fix_review loop│
+│  5. sdd_log_event                                               │
+│  Post-pipeline: haiku-analyst retro → sdd_memory_write          │
+│                 → sdd_tick_decay (TTL prune)                     │
+└──────┬────────┬────────┬────────┬────────┬────────┬────────────┘
+       │        │        │        │        │        │
+    [1]│     [2]│     [3]│     [4]│     [5]│     [6]│  [7]
+┌──────▼────────▼────────▼────────▼────────▼────────▼────────────┐
+│              SUBAGENT LAYER  (.claude/agents/*.md)              │
+│                                                                 │
+│  [0] haiku-analyst ──────────────────────────────────────────┐  │
+│      (triage + retro)                                        │  │
+│                                                              │  │
+│  [1] spec-generator ──► [2] plan-architect ──► [3] task-     │  │
+│      sonnet                  sonnet               decomposer │  │
+│        │                       │                  sonnet     │  │
+│        ▼                       ▼                             │  │
+│  haiku-validator         haiku-validator                     │  │
+│  (gate check)            (gate check)                        │  │
+│                                                              │  │
+│  [4] implementation-engine (per task, wave-parallel)         │  │
+│      sonnet · Read/Write/Edit/Bash                           │  │
+│        │ self-transition: implementing→implementing           │  │
+│        ▼                                                     │  │
+│  [5] verification-engine ──────────────────────────────────┐ │  │
+│      sonnet · read-only                                     │ │  │
+│      produces: VERIFICATION_RESULT {status,findings,…}      │ │  │
+│        │ FAIL ──────────────────────────────────────────────┘ │  │
+│        │ SPEC_GAP ──────────────────────────────────────────►[1] │
+│        │ PASS                                                 │  │
+│        ▼                                                     │  │
+│  [6] adversarial-reviewer                                    │  │
+│      opus · read-only                                        │  │
+│      produces: REVIEW_RESULT {decision,findings}             │  │
+│        │ REQUEST_CHANGES ─────────────────────────────────►[4]  │
+│        │ APPROVE                                              │  │
+│        ▼                                                        │
+│  [7] pr-creator                                              │  │
+│      sonnet · Bash (git + gh cli)                            │  │
+│                                                              │  │
+│  [pair] opus-coach ─── reviews artifacts on specify/         │  │
+│         opus           implement/verify stages               │  │
+│                                                              │  │
+│  haiku-analyst (retro mode) ◄────────────────────────────────┘  │
+└──────────────────────────┬──────────────────────────────────────┘
+                           │  mcp__sdd-autopilot__sdd_* tools
+                           ▼
+┌─────────────────────────────────────────────────────────────────┐
+│             MCP SERVER  (engine/src/)  stdio transport          │
+│                                                                 │
+│  index.ts ── handlers.ts ── state.ts ── memory.ts               │
+│              tasks.ts ──── observability.ts                     │
+│                                                                 │
+│  ── 13 tools ──────────────────────────────── consumer ──────── │
+│  sdd_get_state          ◄── all agents                          │
+│  sdd_transition         ◄── orchestrator · impl-engine          │
+│  sdd_get_contract       ◄── orchestrator                        │
+│  sdd_evaluate_gate      ◄── orchestrator                        │
+│  sdd_classify_failure   ◄── orchestrator (fix loops)            │
+│  sdd_delta_check        ◄── orchestrator (fix loops)            │
+│  sdd_log_event          ◄── orchestrator · haiku-analyst        │
+│  sdd_memory_read        ◄── spec/plan/impl/verif/analyst        │
+│  sdd_memory_write       ◄── haiku-analyst (retro)               │
+│  sdd_tick_decay         ◄── orchestrator (post-pipeline)        │
+│  sdd_append_signal      ◄── plan/impl/verif/adv-reviewer        │
+│  sdd_update_task        ◄── impl-engine                         │
+│  sdd_update_feature     ◄── orchestrator                        │
+└──────────────────────────┬──────────────────────────────────────┘
+                           │  R/W
+                           ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                  PERSISTENCE LAYER  (.sdd/)                     │
+│                                                                 │
+│   state.json   ◄── feature states + task list + signals         │
+│   memory.md    ◄── 2-layer (project scope / user scope)         │
+│   runs/        ◄── audit trail (sdd_log_event output)           │
+│   specs/       ◄── spec.md · plan.md · tasks.md per feature     │
+│   escalation/  ◄── escalation reports                           │
+└─────────────────────────────────────────────────────────────────┘
 
-**MCP server** (`engine/`) — a deterministic Node.js stdio server exposing 11 `sdd_*` tools. No LLM calls. Pure state management, gate evaluation, memory, signals, and observability.
 
-**Claude Code subagents** (`.claude/agents/`) — 10 native subagents invoked by the orchestrator skill. Each has a defined model, tool access, and mission. The orchestrator (`/sdd-auto:run`) coordinates them via MCP tools and the `Agent` tool.
+┌─────────────────────────────────────────────────────────────────┐
+│          PIPELINE PHASES  (contracts.json)                      │
+│                                                                 │
+│  [0] triage     haiku      — complexity estimate, risk flag     │
+│  [1] specify    sonnet     draft → specified                    │
+│  [2] plan       sonnet     specified → planned                  │
+│  [3] tasks      sonnet     planned → decomposed                 │
+│  [4] implement  sonnet×N   decomposed → implementing (per task) │
+│  [5] verify     sonnet     implementing → verifying             │
+│  [6] review     opus       verifying → reviewing                │
+│  [7] pr         sonnet     reviewing → pr_created               │
+│                                                                 │
+│  gate=mechanical: orchestrator evalúa + transiciona             │
+│  gate=haiku-validator: haiku-validator evalúa semánticamente     │
+│  gate=self: structured output del agente determina transición    │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+Two hard layers. The MCP server is deterministic Node.js — no LLM, pure state. The subagents are Claude — no state, pure reasoning. The orchestrator skill wires them together.
+
+## State machine
+
+Transition graph enforced in code (`AGENT_PERMISSIONS` in `engine/src/state.ts`), not in `state.json`:
+
+```
+                        ┌──────────────────────────────────────────┐
+                        │  escalated  ← orchestrator, any state    │
+                        └──────────────────────────────────────────┘
+
+ draft ──▶ specified ──▶ planned ──▶ decomposed ──▶ implementing ──▶ verifying ──▶ reviewing ──▶ pr_created ──▶ merged
+                                          │               │               │
+                                          ▼               ▼               ▼
+                                       blocked          fix_loop       fix_review
+                                    awaiting_input
+```
+
+## File structure
 
 ```
 sdd-autopilot/
 ├── .claude-plugin/
 │   ├── plugin.json          # Plugin manifest + mcpServers declaration
 │   └── marketplace.json     # Distribution metadata
+│
 ├── .claude/
-│   └── agents/              # Native Claude Code subagents
+│   └── agents/              # Native Claude Code subagents (operative)
 │       ├── spec-generator.md
 │       ├── plan-architect.md
 │       ├── task-decomposer.md
@@ -64,24 +200,28 @@ sdd-autopilot/
 │       ├── haiku-analyst.md
 │       ├── haiku-validator.md
 │       └── pr-creator.md
+│
 ├── skills/
-│   ├── auto-run/SKILL.md    # /sdd-auto:run — orchestrator
+│   ├── auto-run/SKILL.md    # /sdd-auto:run — pipeline orchestrator
 │   ├── auto-init/SKILL.md   # /sdd-auto:init
 │   └── auto-status/SKILL.md # /sdd-auto:status
-└── engine/                  # MCP server (TypeScript)
+│
+└── engine/                  # MCP server (TypeScript, stdio transport)
     ├── src/
-    │   ├── index.ts         # MCP server entry (stdio transport, 11 tools)
+    │   ├── index.ts         # Entry point — 13 sdd_* tools registered
     │   ├── handlers.ts      # Deterministic tool handlers
     │   ├── state.ts         # StateManager + AGENT_PERMISSIONS governance
-    │   ├── memory.ts        # Two-layer memory (project + user)
+    │   ├── memory.ts        # Two-layer memory (project + user scope)
+    │   ├── tasks.ts         # parseTasks() + computeWaves()
+    │   ├── observability.ts # RunLogger
     │   ├── types.ts         # Shared types
     │   └── contracts.json   # Pipeline phase definitions (single source of truth)
-    ├── test-e2e.mjs         # Mechanical tests (92 assertions, no API calls)
+    ├── test-e2e.mjs         # Mechanical tests (105 assertions, no API calls)
     ├── package.json
     └── tsconfig.json
 ```
 
-### MCP tools
+## MCP tools
 
 | Tool | Purpose |
 |------|---------|
@@ -96,18 +236,8 @@ sdd-autopilot/
 | `sdd_memory_write` | Write to project or user memory |
 | `sdd_tick_decay` | Decrement TTLs on learned patterns and exploration entries |
 | `sdd_append_signal` | Emit a signal (dual-write: state.json + signals.jsonl) |
-
-### State machine
-
-Transition graph enforced in code (`AGENT_PERMISSIONS` in `engine/src/state.ts`), not in `state.json`:
-
-```
-draft → specified → planned → decomposed → implementing → verifying → reviewing → pr_created → merged
-                                                ↕               ↕            ↕
-                                           fix_loop       awaiting_input  fix_review
-                                           blocked
-                                           escalated  ← orchestrator can reach from any state
-```
+| `sdd_update_task` | Mark a task as pending / in-progress / completed |
+| `sdd_update_feature` | Persist feature metadata: branch, worktree_path, plan_path, tasks_path, etc. |
 
 ## Installation
 
@@ -170,10 +300,10 @@ Shows feature states, task progress, verification/review attempt counts, active 
 cd engine
 npm run build
 node test-e2e.mjs
-# → 92/92 PASS
+# → 105/105 PASS
 ```
 
-92 assertions covering all 11 MCP tool handlers, state machine boundaries, memory, signal routing, gate evaluation, delta check, and observability — all without any API calls.
+105 assertions covering all 13 MCP tool handlers, the complete happy-path pipeline (draft → pr_created), state machine boundaries, memory, signal routing, gate evaluation, delta check, and observability — all without any API calls.
 
 ## License
 
