@@ -1,6 +1,49 @@
-// Implement phase prompt — adapted from sdd-implement SKILL.md
-// Stripped: coaching, pair mode, user interaction, single-task flow
-// Kept: scope rules, blocker protocol, validation, batch mode for S tasks
+// Implement phase prompts — adapted from sdd-implement SKILL.md
+// buildImplementTaskPrompt: per-task (v2) — one PTC loop per task, clean context each time
+// buildImplementPrompt: all-tasks (v1 legacy) — single loop over all tasks
+
+// ─── Per-task prompt (v2) ─────────────────────────────────────────
+// Receives a single task block. Reads only spec.md + its own files.
+// Called once per task — context is fresh on every invocation.
+
+export function buildImplementTaskPrompt(
+  featureName: string,
+  taskBlock: string,
+  codemapContext?: string,
+  conventions?: string,
+  learnedPatterns?: string,
+): string {
+  const codemapSection = codemapContext
+    ? `\n<codebase_context>\n${codemapContext}\n</codebase_context>\n`
+    : "";
+  const memorySection = (conventions || learnedPatterns)
+    ? `\n<project_memory>\n${conventions ? `## Project Conventions\n${conventions}\n` : ""}${learnedPatterns ? `\n## Learned Patterns\n${learnedPatterns}\n` : ""}</project_memory>\n`
+    : "";
+
+  return `You are an implementation agent. Your job is to implement exactly one task. You work autonomously.${codemapSection}${memorySection}
+<task>
+${taskBlock}
+</task>
+
+<instructions>
+1. Read specs/${featureName}/spec.md — find the requirements referenced in the task.
+2. Read ONLY the files listed in the task's "Files" field (if they exist).
+3. Implement EXACTLY what the task describes. Nothing more.
+4. Run the task's Validation step. You have up to 3 attempts.
+5. Update .sdd/state.json: mark this task completed (status: "completed", completed_at: ISO timestamp).
+</instructions>
+
+<scope_rules>
+CRITICAL: This is a strict scope boundary.
+- Only touch files listed in the task's Files field.
+- Do NOT read tasks.md — your only task is the one above.
+- Do NOT refactor, add comments, or improve code outside the task scope.
+- If you find a bug outside your scope, note it as CONTEXT_NOTE but do NOT fix it.
+- The only exception: trivial imports or type declarations the task forgot to mention.
+</scope_rules>`;
+}
+
+// ─── All-tasks prompt (v1 legacy) ────────────────────────────────
 
 export function buildImplementPrompt(featureName: string): string {
   return `You are an implementation agent. Your job is to execute ALL tasks from the SDD task list for this feature. You work autonomously — implement every task in order, validate each one, and report completion.

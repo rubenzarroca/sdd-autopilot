@@ -98,18 +98,79 @@ export const TOOLS: Anthropic.Messages.Tool[] = [
     allowed_callers: ["code_execution_20260120"],
   } as any,
   {
-    name: "write_state",
+    name: "transition_state",
     description:
-      "Update fields in .sdd/state.json. Merges the provided updates with existing state.",
+      "Transition the active feature to a new lifecycle state. " +
+      "Only transitions authorized for your agent_id are permitted — unauthorized attempts return {ok:false,code:'UNAUTHORIZED'}. " +
+      "Error codes are control signals: UNAUTHORIZED|INVALID_TRANSITION|PRECONDITION_FAILED|FEATURE_NOT_FOUND|ESCALATE|SPEC_GAP|TASK_BLOCKED|DEPENDENCY_MISSING.",
     input_schema: {
       type: "object" as const,
       properties: {
-        updates: {
-          type: "object",
-          description: "Partial state object to merge into state.json",
+        feature_name: {
+          type: "string",
+          description: "The feature identifier (slug used in state.json)",
+        },
+        to_state: {
+          type: "string",
+          enum: [
+            "draft","specified","planned","decomposed",
+            "implementing","blocked","fix_loop","fix_review",
+            "awaiting_input","verifying","reviewing",
+            "pr_created","merged","escalated",
+          ],
+          description: "Target state to transition to",
+        },
+        agent_id: {
+          type: "string",
+          enum: [
+            "spec-generator","plan-generator","task-decomposer",
+            "implementation-engine","verification-engine","fix-engine",
+            "adversarial-reviewer","git-operator","haiku-validator","orchestrator",
+          ],
+          description: "Calling agent's identity — used to authorize the transition",
+        },
+        command: {
+          type: "string",
+          description: "Machine-readable reason for the transition (logged in transition history)",
         },
       },
-      required: ["updates"],
+      required: ["feature_name", "to_state", "agent_id", "command"],
+    },
+    allowed_callers: ["code_execution_20260120"],
+  } as any,
+  {
+    name: "append_signal",
+    description:
+      "Append a typed signal to the feature's signal log. Signals are append-only — never mutated or deleted. " +
+      "Downstream agents in the same or next wave read signals to enrich their context. " +
+      "Signal types: ATTENTION_REQUIRED|PATTERN_DETECTED|DEPENDENCY_WARNING|CONTEXT_NOTE|META_LEARNING_HINT.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        feature_name: {
+          type: "string",
+          description: "The feature identifier",
+        },
+        from_agent: {
+          type: "string",
+          enum: [
+            "spec-generator","plan-generator","task-decomposer",
+            "implementation-engine","verification-engine","fix-engine",
+            "adversarial-reviewer","git-operator","haiku-validator","orchestrator",
+          ],
+          description: "Agent emitting the signal",
+        },
+        signal_type: {
+          type: "string",
+          enum: ["ATTENTION_REQUIRED","PATTERN_DETECTED","DEPENDENCY_WARNING","CONTEXT_NOTE","META_LEARNING_HINT"],
+          description: "Signal category",
+        },
+        payload: {
+          type: "object",
+          description: "Structured signal data — schema varies by signal_type",
+        },
+      },
+      required: ["feature_name", "from_agent", "signal_type", "payload"],
     },
     allowed_callers: ["code_execution_20260120"],
   } as any,

@@ -30,11 +30,14 @@ async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
 // ─── Phase runner ────────────────────────────────────────────────
 
 export interface PhaseOptions {
-  model: "opus" | "sonnet";
+  model: "opus" | "sonnet" | "haiku";
   systemPrompt: string;
   maxIterations?: number;
   onStep?: (label: string) => void;
   projectPath: string;
+  fileCache?: Map<string, string>;
+  // (12.2) Audit trail — called once per tool call with event data (no run_id/phase/agent; caller closes over those)
+  onAuditEvent?: (event: { seq: number; ts: string; tool: string; params_summary: string; result_summary: string; outcome: "ok" | "error" }) => void;
 }
 
 export async function runPhase(
@@ -45,7 +48,7 @@ export async function runPhase(
   const anthropic = new Anthropic();
   const model = MODELS[options.model];
   const maxIterations = options.maxIterations ?? 25;
-  const ctx: HandlerContext = { projectPath: options.projectPath };
+  const ctx: HandlerContext = { projectPath: options.projectPath, fileCache: options.fileCache };
 
   const messages: Anthropic.Messages.MessageParam[] = [
     { role: "user", content: userMessage },
@@ -57,6 +60,9 @@ export async function runPhase(
   let totalOutput = 0;
   let toolCallCount = 0;
   let finalText = "";
+  const startedAt = new Date().toISOString();  // full ISO-8601 with time (12.1)
+  const startMs   = Date.now();
+  let auditSeq = 0;
 
   console.log(`\n  [${phaseName}] Starting (model: ${options.model})...`);
 
@@ -122,12 +128,28 @@ export async function runPhase(
             block.input as Record<string, unknown>,
             ctx,
           );
+          options.onAuditEvent?.({
+            seq: ++auditSeq,
+            ts:  new Date().toISOString(),
+            tool: block.name,
+            params_summary: JSON.stringify(block.input).slice(0, 200),
+            result_summary: JSON.stringify((result as { data?: unknown }).data).slice(0, 200),
+            outcome: "ok",
+          });
           return {
             type: "tool_result" as const,
             tool_use_id: block.id,
             content: JSON.stringify(result),
           };
         } catch (err) {
+          options.onAuditEvent?.({
+            seq: ++auditSeq,
+            ts:  new Date().toISOString(),
+            tool: block.name,
+            params_summary: JSON.stringify(block.input).slice(0, 200),
+            result_summary: (err instanceof Error ? err.message : String(err)).slice(0, 200),
+            outcome: "error",
+          });
           return {
             type: "tool_result" as const,
             tool_use_id: block.id,
@@ -152,6 +174,8 @@ export async function runPhase(
     text: finalText,
     steps,
     model: options.model,
+    started_at: startedAt,
+    elapsed_ms: Date.now() - startMs,
     usage: {
       input_tokens: totalInput,
       output_tokens: totalOutput,

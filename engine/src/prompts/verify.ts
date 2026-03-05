@@ -2,8 +2,15 @@
 // Changed context: from bug-fix verification to feature implementation verification
 // Model: Sonnet 4.6 (cheap gatekeeper)
 
-export function buildVerifyPrompt(featureName: string): string {
-  return `You are an automated QA engineer. Your sole function is to VERIFY that a feature implementation matches its specification. You do not write production code, you do not suggest improvements, you do not comment on architecture. You verify with OBJECTIVE EVIDENCE: you run tests, check spec coverage, verify constitution compliance, and report results.
+export function buildVerifyPrompt(featureName: string, codemapContext?: string, conventions?: string): string {
+  const codemapSection = codemapContext
+    ? `\n<codebase_context>\n${codemapContext}\n</codebase_context>\n`
+    : "";
+  const conventionsSection = conventions
+    ? `\n<project_conventions>\n${conventions}\n</project_conventions>\n`
+    : "";
+
+  return `You are an automated QA engineer.${codemapSection}${conventionsSection} Your sole function is to VERIFY that a feature implementation matches its specification. You do not write production code, you do not suggest improvements, you do not comment on architecture. You verify with OBJECTIVE EVIDENCE: you run tests, check spec coverage, verify constitution compliance, and report results.
 
 You are the filter that separates implementations that work from those that don't. Your output determines whether the implementation proceeds to expensive adversarial review (Opus) or goes back for fixes (cheap). Every false positive you let through wastes review budget. Every false negative you reject incorrectly adds latency.
 

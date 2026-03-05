@@ -1,11 +1,12 @@
 // Handler registry — executes PTC tool calls against the filesystem and shell
 // Adapted from ptc-code-patterns.md handler registry pattern
 
-import { readFile, writeFile, readdir, mkdir, stat } from "node:fs/promises";
+import { readFile, writeFile, readdir, mkdir } from "node:fs/promises";
 import { join, resolve, isAbsolute } from "node:path";
 import { exec } from "node:child_process";
 import { promisify } from "node:util";
-import type { StateJson } from "./types.js";
+import type { AgentId, SignalType } from "./types.js";
+import { StateManager } from "./state.js";
 
 const execAsync = promisify(exec);
 
@@ -26,6 +27,7 @@ type HandlerFn = (
 
 export interface HandlerContext {
   projectPath: string;
+  fileCache?: Map<string, string>;  // per-run read_file cache; invalidated on write/edit
 }
 
 // ─── Path resolution ─────────────────────────────────────────────
@@ -42,8 +44,12 @@ async function handleReadFile(
   ctx: HandlerContext,
 ): Promise<{ data: unknown }> {
   const filePath = resolvePath(params.path as string, ctx.projectPath);
+  if (ctx.fileCache?.has(filePath)) {
+    return { data: { content: ctx.fileCache.get(filePath)!, path: filePath } };
+  }
   try {
     const content = await readFile(filePath, "utf-8");
+    ctx.fileCache?.set(filePath, content);
     return { data: { content, path: filePath } };
   } catch (err) {
     return { data: { error: `Failed to read ${filePath}: ${(err as Error).message}` } };
@@ -59,6 +65,7 @@ async function handleWriteFile(
   try {
     await mkdir(join(filePath, ".."), { recursive: true });
     await writeFile(filePath, content, "utf-8");
+    ctx.fileCache?.set(filePath, content);
     return { data: { success: true, path: filePath } };
   } catch (err) {
     return { data: { error: `Failed to write ${filePath}: ${(err as Error).message}` } };
@@ -83,6 +90,7 @@ async function handleEditFile(
     }
     const updated = content.replace(oldString, newString);
     await writeFile(filePath, updated, "utf-8");
+    ctx.fileCache?.set(filePath, updated);
     return { data: { success: true, path: filePath } };
   } catch (err) {
     return { data: { error: `Failed to edit ${filePath}: ${(err as Error).message}` } };
@@ -135,28 +143,37 @@ async function handleReadState(
   }
 }
 
-async function handleWriteState(
+// transition_state — replaces write_state (raw patch)
+// Governance is enforced here: AGENT_PERMISSIONS rejects unauthorized transitions.
+// Error codes (UNAUTHORIZED, PRECONDITION_FAILED, etc.) are control signals for the orchestrator,
+// not messages for a human to read.
+async function handleTransitionState(
   params: Record<string, unknown>,
   ctx: HandlerContext,
 ): Promise<{ data: unknown }> {
-  const statePath = join(ctx.projectPath, ".sdd", "state.json");
-  const updates = params.updates as Record<string, unknown>;
-  try {
-    let state: StateJson;
-    try {
-      const raw = await readFile(statePath, "utf-8");
-      state = JSON.parse(raw);
-    } catch {
-      return { data: { error: "state.json does not exist. Run init first." } };
-    }
-    // Deep merge updates
-    Object.assign(state, updates);
-    await mkdir(join(statePath, ".."), { recursive: true });
-    await writeFile(statePath, JSON.stringify(state, null, 2), "utf-8");
-    return { data: { success: true } };
-  } catch (err) {
-    return { data: { error: `Failed to write state: ${(err as Error).message}` } };
-  }
+  const featureName = params.feature_name as string;
+  const toState     = params.to_state     as string;
+  const agentId     = params.agent_id     as AgentId;
+  const command     = params.command      as string;
+
+  const mgr = new StateManager(ctx.projectPath);
+  const result = await mgr.transition(featureName, toState as any, agentId, command);
+  return { data: result };
+}
+
+// append_signal — append-only lateral communication between agents
+async function handleAppendSignal(
+  params: Record<string, unknown>,
+  ctx: HandlerContext,
+): Promise<{ data: unknown }> {
+  const featureName = params.feature_name as string;
+  const fromAgent   = params.from_agent   as AgentId;
+  const signalType  = params.signal_type  as SignalType;
+  const payload     = (params.payload     as Record<string, unknown>) ?? {};
+
+  const mgr = new StateManager(ctx.projectPath);
+  const result = await mgr.appendSignal(featureName, fromAgent, signalType, payload);
+  return { data: result };
 }
 
 async function handleRunShell(
@@ -215,14 +232,15 @@ async function handleSearchCode(
 // ─── Registry ────────────────────────────────────────────────────
 
 const handlers: Record<string, HandlerFn> = {
-  read_file: handleReadFile,
-  write_file: handleWriteFile,
-  edit_file: handleEditFile,
-  list_dir: handleListDir,
-  read_state: handleReadState,
-  write_state: handleWriteState,
-  run_shell: handleRunShell,
-  search_code: handleSearchCode,
+  read_file:        handleReadFile,
+  write_file:       handleWriteFile,
+  edit_file:        handleEditFile,
+  list_dir:         handleListDir,
+  read_state:       handleReadState,
+  transition_state: handleTransitionState,
+  append_signal:    handleAppendSignal,
+  run_shell:        handleRunShell,
+  search_code:      handleSearchCode,
 };
 
 // ─── Central executor ────────────────────────────────────────────

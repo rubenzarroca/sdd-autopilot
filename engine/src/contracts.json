@@ -1,0 +1,254 @@
+{
+  "pipeline": "sdd-autopilot",
+  "version": "2.1",
+  "contracts": {
+    "codebase-index": {
+      "agent": "codebase-indexer",
+      "model": "haiku",
+      "input": {
+        "required": [],
+        "optional": [],
+        "max_tokens": 500
+      },
+      "output": {
+        "artifacts": ["specs/{feature}/codebase-map.md"]
+      },
+      "gate": {
+        "type": "mechanical",
+        "checks": ["codebase-map.md created"]
+      },
+      "failure_modes": ["LIST_DIR_ERROR"],
+      "next": "triage"
+    },
+    "triage": {
+      "agent": "triage-engine",
+      "model": "haiku",
+      "input": {
+        "required": ["feature_description", "specs/{feature}/codebase-map.md"],
+        "optional": [],
+        "max_tokens": 1000
+      },
+      "output": {
+        "artifacts": ["TRIAGE_RESULT"]
+      },
+      "gate": {
+        "type": "mechanical",
+        "checks": ["TRIAGE_RESULT emitted"]
+      },
+      "failure_modes": ["CRITICAL_COMPLEXITY"],
+      "next": "specify"
+    },
+    "specify": {
+      "agent": "spec-generator",
+      "model": "sonnet",
+      "input": {
+        "required": ["feature_description"],
+        "optional": ["memory.project_conventions"],
+        "max_tokens": 1500
+      },
+      "output": {
+        "artifacts": ["specs/{feature}/spec.md"],
+        "schema": {
+          "sections": ["overview", "requirements", "edge_cases", "out_of_scope"],
+          "validation": "every requirement must contain a testable assertion"
+        }
+      },
+      "gate": {
+        "type": "mechanical",
+        "checks": ["spec.md created", "requirements section non-empty"]
+      },
+      "pair_review": { "enabled": true, "max_corrections": 1 },
+      "failure_modes": ["NEEDS_CLARIFICATION", "SCOPE_TOO_LARGE"],
+      "next": "plan"
+    },
+    "plan": {
+      "agent": "plan-generator",
+      "model": "sonnet",
+      "input": {
+        "required": ["specs/{feature}/spec.md"],
+        "optional": ["memory.architectural_patterns"],
+        "max_tokens": 2000
+      },
+      "output": {
+        "artifacts": ["specs/{feature}/plan.md", "docs/adr/NNN-{decision-title}.md"]
+      },
+      "gate": {
+        "type": "mechanical",
+        "validator": "haiku-validator",
+        "checks": ["plan.md created", "adr created with status: accepted", "plan covers all spec requirements"]
+      },
+      "failure_modes": ["SPEC_GAP_DETECTED"],
+      "next": "tasks"
+    },
+    "tasks": {
+      "agent": "task-decomposer",
+      "model": "sonnet",
+      "input": {
+        "required": ["specs/{feature}/spec.md", "specs/{feature}/plan.md"],
+        "optional": [],
+        "max_tokens": 2500
+      },
+      "output": {
+        "artifacts": ["specs/{feature}/tasks.md"],
+        "schema": {
+          "format": "TASK-NNN with DAG ordering",
+          "validation": "every task maps to at least one spec requirement"
+        }
+      },
+      "gate": {
+        "type": "mechanical",
+        "validator": "haiku-validator",
+        "checks": [
+          "tasks.md created",
+          "all spec requirements covered by at least one task",
+          "no circular dependencies between tasks"
+        ]
+      },
+      "failure_modes": ["DECOMPOSITION_TOO_GRANULAR", "MISSING_REQUIREMENT_COVERAGE"],
+      "next": "spec-test"
+    },
+    "spec-test": {
+      "agent": "spec-tester",
+      "model": "haiku",
+      "input": {
+        "required": ["specs/{feature}/spec.md", "specs/{feature}/tasks.md"],
+        "optional": [],
+        "max_tokens": 1500
+      },
+      "output": {
+        "artifacts": ["specs/{feature}/test-stubs.md", "SPEC_TEST_RESULT"]
+      },
+      "gate": {
+        "type": "mechanical",
+        "checks": ["test-stubs.md created", "SPEC_TEST_RESULT emitted"]
+      },
+      "failure_modes": ["SPEC_GAP_DETECTED"],
+      "next": "worktree"
+    },
+    "worktree": {
+      "agent": "worktree-manager",
+      "model": "sonnet",
+      "input": {
+        "required": [],
+        "optional": [],
+        "max_tokens": 0
+      },
+      "output": {
+        "artifacts": ["git_worktree"]
+      },
+      "gate": {
+        "type": "mechanical",
+        "checks": ["worktree created or skipped gracefully"]
+      },
+      "failure_modes": ["GIT_ERROR"],
+      "next": "implement"
+    },
+    "implement": {
+      "agent": "implementation-engine",
+      "model": "sonnet",
+      "input": {
+        "required": ["specs/{feature}/tasks.md", "specs/{feature}/spec.md"],
+        "optional": ["memory.project_conventions", "memory.learned_patterns"],
+        "max_tokens": 3000
+      },
+      "output": {
+        "artifacts": ["modified_and_created_files"]
+      },
+      "gate": {
+        "type": "mechanical",
+        "checks": ["all tasks in state=completed", "no syntax errors in modified files"]
+      },
+      "execution": "per_task",
+      "wave_config": {
+        "message_budget": 3,
+        "agents_can_query": ["spec-generator"]
+      },
+      "pair_review": { "enabled": true, "max_corrections": 1 },
+      "failure_modes": ["TASK_BLOCKED", "DEPENDENCY_MISSING"],
+      "next": "verify"
+    },
+    "verify": {
+      "agent": "verification-engine",
+      "model": "sonnet",
+      "input": {
+        "required": ["specs/{feature}/spec.md", "accumulated_diff"],
+        "optional": ["memory.project_conventions"],
+        "max_tokens": 2500
+      },
+      "output": {
+        "artifacts": ["VERIFICATION_RESULT"],
+        "schema": {
+          "sections": ["test_results", "spec_coverage", "regression_check"],
+          "structured_block": "VERIFICATION_RESULT JSON"
+        }
+      },
+      "gate": {
+        "type": "self",
+        "pass_condition": "VERIFICATION_RESULT.status == PASS",
+        "checks": ["all tests pass", "spec coverage complete", "no regressions detected"]
+      },
+      "fix_loop": {
+        "max_attempts": 3,
+        "classify_failure": true,
+        "categories": ["implementation_bug", "spec_gap", "infra_issue"],
+        "delta_check": true
+      },
+      "pair_review": { "enabled": true, "max_corrections": 1 },
+      "failure_modes": ["TESTS_FAILING", "COVERAGE_INSUFFICIENT", "SPEC_GAP", "ESCALATE"],
+      "next": "review"
+    },
+    "review": {
+      "agent": "adversarial-reviewer",
+      "model": "opus",
+      "input": {
+        "required": ["specs/{feature}/spec.md", "accumulated_diff", "VERIFICATION_RESULT"],
+        "optional": ["specs/{feature}/plan.md"],
+        "max_tokens": 4000
+      },
+      "output": {
+        "artifacts": ["REVIEW_RESULT"],
+        "schema": {
+          "findings": "array of {severity, category, description, suggestion}",
+          "verdict": "APPROVE | REQUEST_CHANGES"
+        }
+      },
+      "gate": {
+        "type": "self",
+        "pass_condition": "REVIEW_RESULT.decision == APPROVE",
+        "severity_handling": {
+          "blocking": "gate fails, triggers fix loop",
+          "warning": "logged, does not block"
+        }
+      },
+      "fix_loop": {
+        "max_attempts": 2,
+        "delta_check": true
+      },
+      "failure_modes": ["CRITICAL_ISSUES", "ESCALATE"],
+      "next": "pr"
+    },
+    "pr": {
+      "agent": "git-operator",
+      "model": "sonnet",
+      "input": {
+        "required": ["specs/{feature}/spec.md", "accumulated_diff", "REVIEW_RESULT"],
+        "optional": [],
+        "max_tokens": 1000
+      },
+      "output": {
+        "artifacts": ["pull_request"],
+        "schema": {
+          "title": "derived from feature description",
+          "body": "spec.md content + review summary",
+          "labels": ["sdd-autopilot"]
+        }
+      },
+      "gate": {
+        "type": "mechanical",
+        "checks": ["pr_url returned", "branch pushed to remote"]
+      },
+      "failure_modes": ["GIT_ERROR", "GH_CLI_ERROR"],
+      "next": null
+    }
+  }
+}
