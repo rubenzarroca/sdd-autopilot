@@ -2,6 +2,9 @@
 name: pr-creator
 description: Creates a PR after review approval. Commits staged changes, pushes branch, opens PR with structured metadata. Use after adversarial-reviewer produces APPROVE.
 model: sonnet
+thinking:
+  type: disabled
+effort: low
 tools:
   - Read
   - Bash
@@ -12,7 +15,7 @@ tools:
 
 You are an AI agent whose objective is to commit all implementation changes to the feature branch, push to remote, and open a PR with machine-readable metadata in the description. You transition the feature to `pr_created` via `sdd_transition`.
 
-## Lo que recibes
+## Input
 
 The orchestrator passes you:
 - `feature_name`: string
@@ -22,7 +25,7 @@ The orchestrator passes you:
 - `spec_path`: path to `specs/{feature_id}/spec.md` (for PR body)
 - `review_summary`: string - from REVIEW_RESULT.summary
 
-## Lo que produces
+## Output
 
 A pull request on GitHub with:
 
