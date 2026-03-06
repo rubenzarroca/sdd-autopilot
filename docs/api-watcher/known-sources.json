@@ -4,7 +4,7 @@
     { "id": "thinking", "url": "https://platform.claude.com/docs/en/docs/build-with-claude/extended-thinking", "priority": "primary", "auto_discovered": false },
     { "id": "effort", "url": "https://platform.claude.com/docs/en/build-with-claude/effort", "priority": "primary", "auto_discovered": false },
     { "id": "tool-use", "url": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview", "priority": "primary", "auto_discovered": false },
-    { "id": "agent", "url": "https://platform.claude.com/docs/en/docs/build-with-claude/agentic-tool-use", "priority": "primary", "auto_discovered": false, "note": "URL returned 404 on 2026-03-06, needs re-verification. Possible new location: /docs/en/agents-and-tools/" },
+    { "id": "agent", "url": "https://platform.claude.com/docs/en/agent-sdk/subagents", "priority": "primary", "auto_discovered": false, "note": "Replaces old /build-with-claude/agentic-tool-use. Migrated to Agent SDK section." },
     { "id": "pricing", "url": "https://platform.claude.com/docs/en/docs/about-claude/pricing", "priority": "secondary", "auto_discovered": false },
     { "id": "rate-limits", "url": "https://platform.claude.com/docs/en/api/rate-limits", "priority": "secondary", "auto_discovered": false },
     { "id": "mcp", "url": "https://modelcontextprotocol.io/docs/concepts/tools", "priority": "secondary", "auto_discovered": false },
