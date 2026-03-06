@@ -126,6 +126,7 @@ USER (Claude Code CLI)
 │                                                                 │
 │  index.ts ── handlers.ts ── state.ts ── memory.ts               │
 │              tasks.ts ──── observability.ts ── metacognition.ts │
+│              utils.ts (fileExists · parseJsonl)                 │
 │                                                                 │
 │  ── 24 tools ──────────────────────────────── consumer ──────── │
 │  sdd_get_state          ◄── all agents                          │
@@ -304,7 +305,8 @@ sdd-autopilot/
 │   │   ├── tasks.ts         # parseTasks() + computeWaves()
 │   │   ├── observability.ts # PhaseMetrics · RunSummary · cross-run analytics
 │   │   ├── metacognition.ts # Scoring · patterns · experiments · evolution
-│   │   ├── types.ts         # Shared types
+│   │   ├── types.ts         # Shared types (FindingSeverity, PhaseMetrics, …)
+│   │   ├── utils.ts         # Shared utilities (fileExists, parseJsonl)
 │   │   └── contracts.json   # Pipeline phase definitions (single source of truth)
 │   ├── test-e2e.mjs         # Mechanical tests (273 assertions, no API calls)
 │   ├── package.json

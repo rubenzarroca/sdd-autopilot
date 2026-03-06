@@ -16,7 +16,7 @@ You are the orchestrator for the SDD Autopilot pipeline. You coordinate the full
 ## What to do
 
 1. Parse the feature description from `$ARGUMENTS`. If empty, ask the user what feature they want to build.
-2. Determine the project path. Use the current working directory unless the user specified a different path.
+2. Determine the project path. Use the current working directory unless the user specified a different path. **Generate a `run_id`** using the format `{feature_id}-{unix-timestamp-ms}` (e.g., `health-check-endpoint-1741189200000`). The feature_id comes from step 1. Store `run_id` in memory for this pipeline run — it must be passed to every `sdd_emit_metrics` call.
 3. **Auto-initialize if needed**: Call `mcp__sdd-autopilot__sdd_get_state` with the project path.
    - If it returns an error indicating the project is not initialized (e.g., state.json missing or "not initialized"), **do not ask the user** — silently create `.sdd/state.json` with this content and continue:
      ```json
@@ -72,6 +72,7 @@ For each phase:
    - For phases with `gate.type = "self"` (verify, review): the transition depends on the subagent's structured output:
      - verify: VERIFICATION_RESULT.status=PASS → call `sdd_transition(verifying→reviewing)`. FAIL/SPEC_GAP → go to step 9.
      - review: REVIEW_RESULT.decision=APPROVE → call `sdd_transition(reviewing→pr_created)`. REQUEST_CHANGES → call `sdd_transition(reviewing→fix_review)` then enter fix loop.
+   - Call `mcp__sdd-autopilot__sdd_emit_metrics` with the PhaseMetrics for this phase (see Observability section below for the schema)
    - Call `sdd_log_event` with event_type `"phase_complete"`, data `{ gate_result: "passed", phase }` (see Observability section)
    - For plan phase: call `mcp__sdd-autopilot__sdd_update_feature` to persist `plan_path` on the feature
    - For tasks phase: call `mcp__sdd-autopilot__sdd_update_feature` to persist `tasks_path` on the feature
@@ -203,6 +204,41 @@ sdd_log_event(project_path, feature_id, event_type="escalation", phase="{phase}"
   data={ reason: "{human-readable reason}", failure_mode: "{SPEC_GAP|TASK_BLOCKED|...}", action: "escalated" | "awaiting_input" })
 ```
 
+### 8. sdd_emit_metrics (after each phase)
+
+Call `mcp__sdd-autopilot__sdd_emit_metrics` immediately after each phase completes (gate passed or failed definitively). Capture timestamps manually since the Agent tool does not expose them natively.
+
+**Instrumentation pattern:**
+```
+started_at  = new Date().toISOString()  // capture before Agent call
+t0          = Date.now()                // capture before Agent call
+// ... invoke subagent via Agent tool ...
+completed_at = new Date().toISOString() // capture after Agent returns
+duration_ms  = Date.now() - t0
+
+sdd_emit_metrics(project_path, metrics={
+  run_id:            "{run_id}",          // from step 2 (format: feature_id-timestamp_ms)
+  feature_id:        "{feature_id}",
+  phase:             "{phase_name}",
+  agent:             "{subagent_name}",
+  model:             "{haiku|sonnet|opus}",
+  started_at,
+  completed_at,
+  duration_ms,
+  tokens_in:         null,               // not available from Agent tool
+  tokens_out:        null,               // not available from Agent tool
+  tool_calls_count:  0,                  // not available from Agent tool
+  gate_result:       "pass"|"fail"|"skip",
+  gate_attempts:     N,                  // 1 if first attempt, 2+ if fix loop
+  findings_count:    N,                  // from verify/review structured output; 0 for other phases
+  findings_severity: [],                 // ["critical", "major", "minor"] from verify/review; [] for other phases
+  fix_loop_count:    N,                  // 0 if passed on first try
+  delta_direction:   null|"improving"|"regressing"|"stable",  // from sdd_delta_check if fix loop ran
+  feature_type:      "{type}"|null,      // from triage (propagate to all phases)
+  complexity:        "{level}"|null,     // from triage (propagate to all phases)
+})
+```
+
 ## Signal routing
 
 During the pipeline, agents may emit signals via `sdd_append_signal`. Route them as follows:
@@ -241,7 +277,7 @@ Report to the user at these points:
 - **Gate result**: "Gate {phase}: {PASS/FAIL}" (if FAIL, include reason)
 - **Fix loop**: "Fix loop attempt {N}/{max}: {category}"
 - **Escalation**: Full escalation report
-- **Completion**: "Pipeline complete. PR: {url}" with summary of what was built
+- **Completion**: "Pipeline complete. PR: {url} | Score: {pipeline_score}/100" with summary of what was built
 
 ## PR phase details
 
@@ -261,10 +297,13 @@ If `--skip-pr` is set: skip step 2b (push + PR creation) but still commit in the
 ## Post-pipeline
 
 After PR creation succeeds:
-1. Run `haiku-analyst` in retro mode (compare first-pass diff with final diff)
-2. Process buffered META_LEARNING_HINT signals
-3. Write learnings to memory via `sdd_memory_write`
-4. Call `mcp__sdd-autopilot__sdd_tick_decay` to decrement TTLs on learned patterns and prune stale entries
+1. Call `mcp__sdd-autopilot__sdd_get_run_summary` with `project_path`, `feature_id`, and the `run_id` from step 2. This aggregates all PhaseMetrics into a RunSummary, persists `summary.json`, and appends to `analytics/history.jsonl`. After the call, patch `review_decision` in `summary.json` using the review agent's structured output (`APPROVE` → `"approve"`, `REQUEST_CHANGES` → `"request_changes"`).
+2. Call `mcp__sdd-autopilot__sdd_compute_score` with `project_path` and `feature_id`. This reads the patched `summary.json` and `analytics/history.jsonl`, computes quality + efficiency scores, and persists `pipeline_score` back into `summary.json`. Log the returned `pipeline_score` in the user-facing completion message.
+3. Run `haiku-analyst` in retro mode (compare first-pass diff with final diff)
+4. Process buffered META_LEARNING_HINT signals
+5. Write learnings to memory via `sdd_memory_write`
+6. Call `mcp__sdd-autopilot__sdd_tick_decay` to decrement TTLs on learned patterns and prune stale entries
+7. Call `mcp__sdd-autopilot__sdd_tick_patterns` to decrement TTLs on ExploitationPatterns and decay expired ones
 5. **Worktree cleanup** (if worktree was created and PR is merged):
    - Invoke `worktree-pr cleanup` in automated mode: `repo_path` = project_path, `feature_name` = feature_id
    - This removes the sibling directory, deletes local and remote `feat/{feature-id}` branches, and pulls latest default branch.
@@ -274,6 +313,64 @@ After PR creation succeeds:
 
 - `--skip-worktree`: Work directly in the project directory instead of creating a git worktree. Skips `worktree-pr start`, `finish`, and `cleanup`. pr-creator handles all git operations as before.
 - `--skip-pr`: Skip the PR creation step (useful for testing). Commits to worktree branch but does not push or open PR. Worktree cleanup is also skipped.
+
+## Adaptive Orchestrator (Decision Tree)
+
+The full adaptive decision tree is designed here and activated progressively as tools become available. The orchestrator reads this section at every run start and run close.
+
+### Run start (adaptive routing)
+
+```
+start of run
+    │
+    ├── [PHASE 3 - ACTIVE] Call `sdd_get_patterns` with feature_type + complexity from triage
+    │   └── filter returns active patterns whose condition matches this run
+    │       └── If active patterns found:
+    │           ├── pattern.type="skip_phase"   → remove that phase from execution sequence
+    │           ├── pattern.type="model_swap"   → override model for that phase
+    │           ├── pattern.type="gate_adjust"  → pass gate threshold override to subagent context
+    │           └── pattern.type="prompt_tuning"→ inject pattern.action into subagent context
+    │
+    └── [PHASE 4 - ACTIVE] Call `sdd_get_patterns` status=all to check experiments.json indirectly; read `.sdd/metacognition/experiments.json` directly
+        └── filter experiments where status="proposed"
+            └── Is this the exploration turn? (run_count % 5 == 0, tracked in analytics/history.jsonl line count)
+                ├── NO  → exploitation mode (apply active patterns, skip experiment)
+                └── YES → check experiment.risk_level
+                    ├── "low" | "medium" → apply experiment.mutation; mark status="running"
+                    └── "high"           → surface to user for approval before applying
+                                           ├── approved → apply + mark status="running"
+                                           └── rejected → mark status="abandoned"; proceed with patterns only
+```
+
+**Phase 1 behaviour (current):** No patterns or experiments exist yet. Run start proceeds without modifications.
+
+### Run close (metacognition update)
+
+```
+after PR creation
+    │
+    ├── [PHASE 1 - ACTIVE] sdd_get_run_summary → persist summary.json + history.jsonl
+    │
+    ├── [PHASE 2 - ACTIVE] sdd_compute_score → compute pipeline_score, update summary.json
+    │
+    ├── haiku-analyst retro (existing, post-pipeline step 2)
+    │   ├── [PHASE 3 - ACTIVE] emit ExploitationPattern candidates via sdd_propose_pattern
+    │   └── [PHASE 4 - ACTIVE] propose Experiment via sdd_propose_experiment (if exploration turn — 1 in every 5 runs)
+    │
+    ├── [PHASE 3 - ACTIVE] sdd_promote_pattern → promote candidates with supporting_runs >= 5 AND confidence >= 0.7
+    │
+    ├── [PHASE 4 - ACTIVE] sdd_evaluate_experiment
+    │   └── if experiment status="running": compare result_score vs baseline_score → write verdict
+    │       ├── result_score >= baseline_score       → verdict="promote" → convert to ExploitationPattern
+    │       ├── result_score < baseline_score × 0.9  → verdict="discard" → accelerated decay
+    │       └── ambiguous                            → verdict="retry" (max 2 retries)
+    │
+    └── [PHASE 5 - ACTIVE] if (run_count % config.review_every_n == 0): spawn opus-meta-reviewer
+        └── Opus receives: last N RunSummaries + active patterns + completed experiments + trends
+            └── Outputs PipelineEvolution via sdd_propose_evolution
+```
+
+**Tracking `run_count`:** Count lines in `.sdd/analytics/history.jsonl`. Opus meta-reviewer trigger fires when `run_count % review_every_n == 0`. Default `review_every_n` = 10 (read from `.sdd/metacognition/config.json` if present, otherwise default). When triggered: spawn `opus-meta-reviewer` with the last N RunSummaries, active patterns, completed experiments, and analytics trends. The reviewer calls `sdd_propose_evolution` to persist its findings.
 
 ## Example
 

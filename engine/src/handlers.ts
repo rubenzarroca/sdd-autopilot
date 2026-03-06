@@ -1,7 +1,7 @@
 // MCP Tool handlers — 11 sdd_* tools for the SDD Autopilot MCP server
 // All handlers are purely deterministic (no LLM calls).
 
-import { readFile, writeFile, mkdir, appendFile, access } from "node:fs/promises";
+import { readFile, writeFile, mkdir, appendFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
@@ -11,6 +11,7 @@ import type { AgentId, FeatureState, PipelineContracts } from "./types.js";
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
+import { fileExists } from "./utils.js";
 
 // ─── Load contracts.json at startup ──────────────────────────────
 
@@ -25,17 +26,6 @@ try {
   // Fallback for build directory structure
   const altPath = resolve(__dirname, "..", "src", "contracts.json");
   contracts = JSON.parse(readFileSync(altPath, "utf-8")) as PipelineContracts;
-}
-
-// ─── Helper: file exists check ────────────────────────────────────
-
-async function fileExists(path: string): Promise<boolean> {
-  try {
-    await access(path);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 // ─── 1. sdd_get_state ─────────────────────────────────────────────
