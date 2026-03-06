@@ -1,0 +1,67 @@
+name: API Docs Watcher
+
+on:
+  schedule:
+    - cron: '0 8 * * 1'    # Mondays 08:00 UTC
+  workflow_dispatch:         # Manual trigger for testing
+
+permissions:
+  issues: write
+  contents: write
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Fetch current docs
+        run: bash docs/api-watcher/fetch-docs.sh
+
+      - name: Diff and classify
+        id: diff
+        run: bash docs/api-watcher/diff-and-classify.sh
+
+      - name: Discover new sources
+        id: discover
+        run: bash docs/api-watcher/discover-sources.sh
+
+      - name: Merge discovery report into main report
+        if: steps.discover.outputs.new_sources == 'true'
+        run: |
+          if [ -f /tmp/api-watcher-discovery.md ]; then
+            cat /tmp/api-watcher-discovery.md >> /tmp/api-watcher-report.md
+          fi
+
+      - name: Open issue if changes detected
+        if: steps.diff.outputs.has_changes == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const report = fs.readFileSync('/tmp/api-watcher-report.md', 'utf8');
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `[API Watcher] Changes detected in Anthropic docs — ${new Date().toISOString().split('T')[0]}`,
+              body: report,
+              labels: ['api-watcher', 'maintenance']
+            });
+
+      - name: Update snapshots and commit
+        if: steps.diff.outputs.has_changes == 'true'
+        run: |
+          cp /tmp/api-snapshots-new/*.md docs/api-snapshots/
+          cp /tmp/api-snapshots-new/metadata.json docs/api-snapshots/
+          git config user.name "api-docs-watcher"
+          git config user.email "watcher@sdd-autopilot"
+          git add docs/api-snapshots/
+
+          # Also commit known-sources.json if auto-discovery added new sources
+          if [ "${{ steps.discover.outputs.new_sources }}" = "true" ]; then
+            git add docs/api-watcher/known-sources.json
+          fi
+
+          git commit -m "chore: update API doc snapshots [api-watcher]"
+          git push

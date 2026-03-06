@@ -1,0 +1,40 @@
+{
+  "classification_rules": [
+    {
+      "impact": "critical",
+      "triggers": ["deprecat", "removed", "breaking", "end-of-life", "sunset"],
+      "description": "Something we use is going away. Immediate action required.",
+      "action": "Update model-config.json and agent definitions. Run tests."
+    },
+    {
+      "impact": "high",
+      "triggers": ["new model", "model string", "thinking", "adaptive", "effort", "budget_tokens"],
+      "description": "Change in models or reasoning config. Directly affects model-config.json.",
+      "action": "Review model-config.json. Evaluate if any agent benefits from the change."
+    },
+    {
+      "impact": "medium",
+      "triggers": ["pricing", "rate limit", "token", "context window"],
+      "description": "Change in cost or limits. May affect composite score or parallel waves.",
+      "action": "Review score_weights.json and metacognition config.json."
+    },
+    {
+      "impact": "low",
+      "triggers": ["documentation", "example", "typo", "clarification"],
+      "description": "Cosmetic docs change. Likely no action needed.",
+      "action": "Awareness only. No action needed."
+    }
+  ],
+  "source_to_config_mapping": {
+    "models": ["engine/src/model-config.json"],
+    "thinking": ["engine/src/model-config.json", ".claude/agents/*.md"],
+    "effort": ["engine/src/model-config.json", ".claude/agents/*.md"],
+    "tool-use": ["engine/src/handlers.ts", "engine/src/index.ts"],
+    "agent": ["skills/auto-run/SKILL.md", ".claude/agents/*.md"],
+    "pricing": [".sdd/metacognition/score_weights.json"],
+    "rate-limits": [".sdd/metacognition/config.json"],
+    "mcp": ["engine/src/index.ts", "engine/src/handlers.ts"],
+    "claude-code": [".claude-plugin/plugin.json", "skills/*.md"],
+    "changelog": ["*"]
+  }
+}
