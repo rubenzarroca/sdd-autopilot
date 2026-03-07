@@ -14,6 +14,46 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { homedir } from "node:os";
 
+// ─── Memory Provenance Types (GAP-02) ─────────────────────────────
+
+export interface MemoryEntryMetadata {
+  agent: string;
+  run_id: string;
+  feature_id: string;
+  timestamp: string;
+  confidence: number;  // 0-1
+  ttl?: number;
+}
+
+export interface MemoryEntry {
+  content: string;
+  metadata: MemoryEntryMetadata;
+}
+
+// ─── Memory Sanitization (GAP-03) ─────────────────────────────────
+
+const INJECTION_PATTERNS: RegExp[] = [
+  /ignore previous instructions/i,
+  /ignore all previous/i,
+  /you are now/i,
+  /\bact as\b/i,
+  /system prompt/i,
+  /\boverride\b/i,
+  /\bdisregard\b/i,
+  /pretend you are/i,
+  /from now on you are/i,
+];
+
+export function sanitizeMemoryContent(content: string): { clean: boolean; content: string; warnings: string[] } {
+  const warnings: string[] = [];
+  for (const pattern of INJECTION_PATTERNS) {
+    if (pattern.test(content)) {
+      warnings.push(`Suspicious pattern detected: ${pattern.source}`);
+    }
+  }
+  return { clean: warnings.length === 0, content, warnings };
+}
+
 // ─── Types ───────────────────────────────────────────────────────
 
 export interface ProjectMemory {

@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 import { execSync } from "node:child_process";
 import { homedir } from "node:os";
 import { StateManager, AGENT_PERMISSIONS } from "./state.js";
-import { MemoryManager } from "./memory.js";
+import { MemoryManager, sanitizeMemoryContent } from "./memory.js";
 import type { AgentId, FeatureState, PipelineContracts } from "./types.js";
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -447,6 +447,19 @@ const SECTION_MAP: Record<string, string> = {
   run_history: "Run History",
 };
 
+function wrapWithDefaultMetadata(content: string): { content: string; metadata: import("./memory.js").MemoryEntryMetadata } {
+  return {
+    content,
+    metadata: {
+      agent: "unknown",
+      run_id: "unknown",
+      feature_id: "unknown",
+      timestamp: "unknown",
+      confidence: 0.5,
+    },
+  };
+}
+
 export async function handleMemoryRead(params: {
   project_path: string;
   section: "project_conventions" | "learned_patterns" | "run_history" | "all";
@@ -460,6 +473,7 @@ export async function handleMemoryRead(params: {
     if (params.section === "all") {
       return {
         content: JSON.stringify(mem),
+        entries: [wrapWithDefaultMetadata(JSON.stringify(mem))],
         section: "all",
         scope: "project",
       };
@@ -472,7 +486,7 @@ export async function handleMemoryRead(params: {
       case "run_history": content = mem.runHistory; break;
       default: content = "";
     }
-    return { content, section: params.section, scope: "project" };
+    return { content, entries: [wrapWithDefaultMetadata(content)], section: params.section, scope: "project" };
   }
 
   // User scope
@@ -480,6 +494,7 @@ export async function handleMemoryRead(params: {
   if (params.section === "all") {
     return {
       content: JSON.stringify(mem),
+      entries: [wrapWithDefaultMetadata(JSON.stringify(mem))],
       section: "all",
       scope: "user",
     };
@@ -491,8 +506,10 @@ export async function handleMemoryRead(params: {
     run_history:          "agentPerformanceLog",
   };
   const field = userSectionMap[params.section as string];
+  const content = field ? mem[field] : JSON.stringify(mem);
   return {
-    content: field ? mem[field] : JSON.stringify(mem),
+    content,
+    entries: [wrapWithDefaultMetadata(content)],
     section: params.section,
     scope: "user",
   };
@@ -506,21 +523,56 @@ export async function handleMemoryWrite(params: {
   content: string;
   scope: "project" | "user";
   ttl?: number;
+  agent?: string;
+  run_id?: string;
+  feature_id?: string;
+  confidence?: number;
 }): Promise<unknown> {
   const mm = new MemoryManager(params.project_path);
   const timestamp = new Date().toISOString();
+
+  // GAP-03: Sanitize content
+  const sanitization = sanitizeMemoryContent(params.content);
+
+  // If suspicious patterns detected, emit warning signal
+  if (!sanitization.clean && params.feature_id) {
+    const runDir = resolve(params.project_path, ".sdd", "runs", params.feature_id);
+    await mkdir(runDir, { recursive: true });
+    const signalsPath = join(runDir, "signals.jsonl");
+    const warning = {
+      signal_type: "memory_sanitization_warning",
+      warnings: sanitization.warnings,
+      content_preview: params.content.slice(0, 100),
+      agent: params.agent ?? "unknown",
+      timestamp,
+    };
+    await appendFile(signalsPath, JSON.stringify(warning) + "\n", "utf-8");
+  }
+
+  // GAP-02: Build provenance metadata comment
+  const confidence = Math.max(0, Math.min(1, params.confidence ?? 0.5));
+  const provenanceComment = `<!-- provenance: ${JSON.stringify({
+    agent: params.agent ?? "unknown",
+    run_id: params.run_id ?? "unknown",
+    feature_id: params.feature_id ?? "unknown",
+    timestamp,
+    confidence,
+  })} -->`;
+
+  // Prepend provenance to content for storage
+  const contentWithProvenance = `${provenanceComment}\n${params.content}`;
 
   if (params.scope === "project") {
     // Initialize if not exists
     mm.initProjectMemory("project", "");
 
     if (params.section === "learned_patterns") {
-      mm.appendLearnedPatterns([params.content], undefined, params.ttl ?? 15);
+      mm.appendLearnedPatterns([contentWithProvenance], undefined, params.ttl ?? 15);
     } else if (params.section === "run_history") {
       // Append raw content to run history
       const content = readFileSync(mm.projectMemoryPath, "utf-8");
       const existing = mm.extractSection(content, "Run History");
-      const body = existing.startsWith("(no runs") ? params.content : `${existing.trim()}\n\n${params.content}`;
+      const body = existing.startsWith("(no runs") ? contentWithProvenance : `${existing.trim()}\n\n${contentWithProvenance}`;
       const updated = content.replace(
         new RegExp(`(## Run History\\s*\\n)[\\s\\S]*?(?=\\n## |$)`),
         `$1${body}\n\n`,
@@ -530,7 +582,7 @@ export async function handleMemoryWrite(params: {
       const content = readFileSync(mm.projectMemoryPath, "utf-8");
       const updated = content.replace(
         new RegExp(`(## Project Conventions\\s*\\n)[\\s\\S]*?(?=\\n## |$)`),
-        `$1${params.content}\n\n`,
+        `$1${contentWithProvenance}\n\n`,
       );
       writeFileSync(mm.projectMemoryPath, updated, "utf-8");
     }
@@ -539,16 +591,19 @@ export async function handleMemoryWrite(params: {
     mm.initUserMemory();
 
     if (params.section === "cross_project_patterns") {
-      mm.appendCrossProjectPattern(params.content);
+      mm.appendCrossProjectPattern(contentWithProvenance);
     } else if (params.section === "agent_performance") {
-      // Extract agent name from content or use generic
-      mm.appendAgentPerformanceNote("unknown", params.content);
+      mm.appendAgentPerformanceNote(params.agent ?? "unknown", contentWithProvenance);
     } else {
       return { written: false, reason: `Section "${params.section}" is not supported for user scope. Use "cross_project_patterns" or "agent_performance".` };
     }
   }
 
-  return { written: true, timestamp };
+  const result: Record<string, unknown> = { written: true, timestamp, confidence };
+  if (!sanitization.clean) {
+    result.sanitization_warnings = sanitization.warnings;
+  }
+  return result;
 }
 
 // ─── 10. sdd_tick_decay ──────────────────────────────────────────

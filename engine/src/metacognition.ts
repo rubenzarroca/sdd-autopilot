@@ -98,6 +98,58 @@ function durationTrendScore(summary: RunSummary, history: RunSummary[]): number 
   return 20;                       // >30% slower
 }
 
+// ─── sdd_set_golden ─────────────────────────────────────────────
+
+export async function handleSetGolden(params: {
+  project_path: string;
+  feature_id?: string;
+}): Promise<unknown> {
+  let featureId = params.feature_id;
+
+  // If no feature_id, find the last completed run from history.jsonl
+  if (!featureId) {
+    const historyPath = resolve(params.project_path, ".sdd", "analytics", "history.jsonl");
+    if (!await fileExists(historyPath)) {
+      return { error: "No history.jsonl found and no feature_id provided." };
+    }
+    const raw = await readFile(historyPath, "utf-8");
+    const entries = parseJsonl<RunSummary>(raw);
+    if (entries.length === 0) {
+      return { error: "history.jsonl is empty and no feature_id provided." };
+    }
+    const last = entries[entries.length - 1];
+    featureId = last.feature_id ?? last.run_id;
+    if (!featureId) {
+      return { error: "Last history entry has no feature_id." };
+    }
+  }
+
+  const summaryPath = resolve(params.project_path, ".sdd", "runs", featureId, "summary.json");
+  if (!await fileExists(summaryPath)) {
+    return { error: `No summary.json found for feature "${featureId}".` };
+  }
+
+  const summary: RunSummary = JSON.parse(await readFile(summaryPath, "utf-8"));
+
+  if (summary.pipeline_score == null) {
+    return { error: `summary.json for "${featureId}" has no pipeline_score. Run sdd_compute_score first.` };
+  }
+
+  const goldenDir = resolve(params.project_path, ".sdd", "analytics");
+  await mkdir(goldenDir, { recursive: true });
+  const goldenPath = join(goldenDir, "golden.json");
+
+  const golden = { ...summary, golden_snapshot_at: new Date().toISOString() };
+  await writeFile(goldenPath, JSON.stringify(golden, null, 2), "utf-8");
+
+  return {
+    success: true,
+    pipeline_score: summary.pipeline_score,
+    feature_id: featureId,
+    snapshot_at: golden.golden_snapshot_at,
+  };
+}
+
 // ─── sdd_compute_score ───────────────────────────────────────────
 
 export async function handleComputeScore(params: {
@@ -182,6 +234,30 @@ export async function handleComputeScore(params: {
     weights_used: weights,
   };
 
+  // Golden comparison
+  const goldenPath = resolve(params.project_path, ".sdd", "analytics", "golden.json");
+  let golden_comparison: { status: string; golden_score?: number; current_score?: number; delta?: number };
+
+  if (await fileExists(goldenPath)) {
+    try {
+      const golden = JSON.parse(await readFile(goldenPath, "utf-8"));
+      const goldenScore = golden.pipeline_score;
+      if (typeof goldenScore === "number") {
+        if (pipeline_score < goldenScore * 0.9) {
+          golden_comparison = { status: "below_threshold", golden_score: goldenScore, current_score: pipeline_score, delta: pipeline_score - goldenScore };
+        } else {
+          golden_comparison = { status: "meets_golden", golden_score: goldenScore, current_score: pipeline_score, delta: pipeline_score - goldenScore };
+        }
+      } else {
+        golden_comparison = { status: "no_golden_set" };
+      }
+    } catch {
+      golden_comparison = { status: "no_golden_set" };
+    }
+  } else {
+    golden_comparison = { status: "no_golden_set" };
+  }
+
   // Persist pipeline_score back into summary.json
   summary.pipeline_score = pipeline_score;
   await writeFile(summaryPath, JSON.stringify(summary, null, 2), "utf-8");
@@ -190,7 +266,7 @@ export async function handleComputeScore(params: {
   const metacognitionDir = resolve(params.project_path, ".sdd", "metacognition");
   await mkdir(metacognitionDir, { recursive: true });
 
-  return result;
+  return { ...result, golden_comparison };
 }
 
 // ─── Exploitation Patterns helpers ───────────────────────────────

@@ -54,6 +54,7 @@ import {
   handleGetStrategy,
   handleRunRetro,
   handlePhaseConfidence,
+  handleSetGolden,
 } from "./metacognition.js";
 
 // ─── Tool definitions (JSON Schema) ─────────────────────────────
@@ -70,6 +71,19 @@ export const TOOLS = [
         feature_id: { type: "string", description: "Optional: specific feature to query" },
       },
       required: ["project_path"],
+    },
+    outputSchema: {
+      type: "object" as const,
+      description: "Full StateJson when no feature_id, or single FeatureEntry with feature_id when specified",
+      properties: {
+        feature_id:     { type: "string", description: "Feature identifier (present when querying single feature)" },
+        state:          { type: "string", description: "Current lifecycle state (present for single feature)" },
+        version:        { type: "string", description: "State schema version (present in full state)" },
+        project:        { type: "string", description: "Project name (present in full state)" },
+        active_feature: { type: "string", description: "Currently active feature (present in full state)" },
+        features:       { type: "object", description: "Map of feature_id to FeatureEntry (present in full state)", additionalProperties: true },
+        error:          { type: "string", description: "Error message if state not found or feature missing" },
+      },
     },
   },
   {
@@ -106,6 +120,23 @@ export const TOOLS = [
       },
       required: ["project_path", "feature_id", "from_state", "to_state", "agent_id"],
     },
+    outputSchema: {
+      type: "object" as const,
+      description: "Transition result with success flag and either new_state or error details",
+      properties: {
+        success:   { type: "boolean", description: "Whether the transition succeeded" },
+        new_state: { type: "string", description: "The new lifecycle state (on success)" },
+        error: {
+          type: "object",
+          description: "Error details (on failure)",
+          properties: {
+            code:                 { type: "string", description: "Error code (UNAUTHORIZED, INVALID_TRANSITION, etc.)" },
+            message:              { type: "string", description: "Human-readable error message" },
+            allowed_transitions:  { type: "array", items: { type: "string" }, description: "Valid transitions from current state for this agent" },
+          },
+        },
+      },
+    },
   },
   {
     name: "sdd_get_contract",
@@ -118,6 +149,23 @@ export const TOOLS = [
         phase_id: { type: "string", description: "Phase identifier (e.g. 'specify', 'plan', 'verify')" },
       },
       required: ["phase_id"],
+    },
+    outputSchema: {
+      type: "object" as const,
+      description: "StageContract for the requested phase, or error if phase not found",
+      properties: {
+        agent:         { type: "string", description: "Agent responsible for this phase" },
+        model:         { type: "string", description: "Model to use (sonnet, opus, haiku)" },
+        input:         { type: "object", description: "Required and optional inputs with max_tokens" },
+        output:        { type: "object", description: "Expected artifacts and optional schema" },
+        gate:          { type: "object", description: "Gate configuration (type, checks, pass_condition)" },
+        execution:     { type: "string", description: "Execution mode (sequential, per_task, parallel_waves)" },
+        fix_loop:      { type: "object", description: "Fix loop config (max_attempts, classify_failure, delta_check)" },
+        pair_review:   { type: "object", description: "Pair review config (enabled, max_corrections)" },
+        failure_modes: { type: "array", items: { type: "string" }, description: "Known failure modes" },
+        next:          { type: "string", description: "Next phase in the pipeline (null if terminal)" },
+        error:         { type: "string", description: "Error message if phase not found" },
+      },
     },
   },
   {
@@ -139,6 +187,34 @@ export const TOOLS = [
       },
       required: ["phase_id", "project_path", "feature_id", "artifacts"],
     },
+    outputSchema: {
+      type: "object" as const,
+      description: "Gate evaluation result with per-check details",
+      properties: {
+        passed: { type: "boolean", description: "Whether all mechanical checks passed and no semantic validation is needed" },
+        checks: {
+          type: "array",
+          description: "Individual check results",
+          items: {
+            type: "object",
+            properties: {
+              name:   { type: "string", description: "Check description from contract" },
+              passed: { type: "boolean", description: "Whether this check passed" },
+              detail: { type: "string", description: "Explanation of result" },
+            },
+          },
+        },
+        needs_semantic_validation: {
+          type: "object",
+          description: "Present if a check requires LLM comprehension",
+          properties: {
+            check:       { type: "string" },
+            description: { type: "string" },
+          },
+        },
+        error: { type: "string", description: "Error if phase not found" },
+      },
+    },
   },
   {
     name: "sdd_classify_failure",
@@ -157,6 +233,15 @@ export const TOOLS = [
         test_output: { type: "string", description: "Full test output if available" },
       },
       required: ["phase_id", "error_message"],
+    },
+    outputSchema: {
+      type: "object" as const,
+      description: "Failure classification with category, confidence, and reasoning",
+      properties: {
+        category:   { type: "string", enum: ["implementation_bug", "spec_gap", "infra_issue"], description: "Classified failure category" },
+        confidence: { type: "string", enum: ["high", "medium", "low"], description: "Confidence in the classification" },
+        reasoning:  { type: "string", description: "Explanation of why this category was chosen" },
+      },
     },
   },
   {
@@ -178,6 +263,15 @@ export const TOOLS = [
       },
       required: ["project_path", "feature_id", "phase_id", "current_failures"],
     },
+    outputSchema: {
+      type: "object" as const,
+      description: "Delta check result: continue or abort",
+      properties: {
+        result:             { type: "string", enum: ["continue", "abort"], description: "Whether to continue or abort the fix loop" },
+        previous_failures:  { type: "number", description: "Number of failures in the previous iteration (absent on first iteration)" },
+        reason:             { type: "string", description: "Explanation of the decision" },
+      },
+    },
   },
   {
     name: "sdd_log_event",
@@ -194,6 +288,14 @@ export const TOOLS = [
         data: { type: "object", description: "Arbitrary event data" },
       },
       required: ["project_path", "feature_id", "event_type"],
+    },
+    outputSchema: {
+      type: "object" as const,
+      description: "Confirmation that the event was logged",
+      properties: {
+        logged:    { type: "boolean", description: "Always true on success" },
+        timestamp: { type: "string", description: "ISO8601 timestamp when the event was recorded" },
+      },
     },
   },
   {
@@ -217,6 +319,15 @@ export const TOOLS = [
       },
       required: ["project_path", "section"],
     },
+    outputSchema: {
+      type: "object" as const,
+      description: "Memory section content",
+      properties: {
+        content: { type: "string", description: "The content of the requested section (JSON string for 'all')" },
+        section: { type: "string", description: "The section that was read" },
+        scope:   { type: "string", enum: ["project", "user"], description: "The memory scope" },
+      },
+    },
   },
   {
     name: "sdd_memory_write",
@@ -234,8 +345,21 @@ export const TOOLS = [
           description: "Memory scope",
         },
         ttl: { type: "number", description: "Optional TTL in runs (for learned_patterns decay)" },
+        agent: { type: "string", description: "Agent name for provenance tracking" },
+        run_id: { type: "string", description: "Run ID for provenance tracking" },
+        feature_id: { type: "string", description: "Feature ID for provenance tracking and signal emission" },
+        confidence: { type: "number", description: "Confidence level 0-1 (default 0.5)" },
       },
       required: ["project_path", "section", "content", "scope"],
+    },
+    outputSchema: {
+      type: "object" as const,
+      description: "Write confirmation",
+      properties: {
+        written:   { type: "boolean", description: "Whether the write succeeded" },
+        timestamp: { type: "string", description: "ISO8601 timestamp of the write (on success)" },
+        reason:    { type: "string", description: "Reason for failure (when written=false)" },
+      },
     },
   },
   {
@@ -248,6 +372,15 @@ export const TOOLS = [
         project_path: { type: "string", description: "Absolute path to the project root" },
       },
       required: ["project_path"],
+    },
+    outputSchema: {
+      type: "object" as const,
+      description: "Decay tick results",
+      properties: {
+        patterns_removed:     { type: "number", description: "Number of learned patterns that expired" },
+        explorations_expired: { type: "number", description: "Number of exploration entries that expired" },
+        total_removed:        { type: "number", description: "Total entries removed" },
+      },
     },
   },
   {
@@ -268,6 +401,16 @@ export const TOOLS = [
         },
       },
       required: ["project_path", "feature_id", "task_id", "status"],
+    },
+    outputSchema: {
+      type: "object" as const,
+      description: "Task update result",
+      properties: {
+        updated: { type: "boolean", description: "Whether the update succeeded" },
+        task_id: { type: "string", description: "The task that was updated" },
+        status:  { type: "string", description: "The new task status" },
+        error:   { type: "string", description: "Error message if feature or task not found" },
+      },
     },
   },
   {
@@ -297,6 +440,15 @@ export const TOOLS = [
       },
       required: ["project_path", "feature_id", "updates"],
     },
+    outputSchema: {
+      type: "object" as const,
+      description: "Feature update result",
+      properties: {
+        updated: { type: "boolean", description: "Whether the update succeeded" },
+        fields:  { type: "array", items: { type: "string" }, description: "List of fields that were updated" },
+        error:   { type: "string", description: "Error message if feature not found" },
+      },
+    },
   },
   {
     name: "sdd_append_signal",
@@ -313,6 +465,15 @@ export const TOOLS = [
         severity: { type: "string", description: "Severity level (default: info)" },
       },
       required: ["project_path", "feature_id", "from_agent", "signal_type", "message"],
+    },
+    outputSchema: {
+      type: "object" as const,
+      description: "Signal append confirmation",
+      properties: {
+        appended:  { type: "boolean", description: "Whether the signal was appended" },
+        signal_id: { type: "string", description: "UUID of the appended signal" },
+        in_state:  { type: "boolean", description: "Whether the signal was also written to state.json" },
+      },
     },
   },
 
@@ -334,6 +495,32 @@ export const TOOLS = [
       },
       required: ["project_path", "feature_id"],
     },
+    outputSchema: {
+      type: "object" as const,
+      description: "CompositeScore with pipeline_score, quality/efficiency breakdown, and weights used",
+      properties: {
+        run_id:           { type: "string", description: "Run identifier" },
+        feature_id:       { type: "string", description: "Feature identifier" },
+        pipeline_score:   { type: "number", description: "Composite score 0-100 (1 decimal)" },
+        quality_score:    { type: "number", description: "Quality dimension 0-100" },
+        efficiency_score: { type: "number", description: "Efficiency dimension 0-100" },
+        breakdown: {
+          type: "object",
+          description: "Individual sub-scores",
+          properties: {
+            review_result_score:   { type: "number" },
+            first_pass_rate_score: { type: "number" },
+            findings_score:        { type: "number" },
+            verify_clean_score:    { type: "number" },
+            fix_loops_score:       { type: "number" },
+            phases_skipped_score:  { type: "number" },
+            duration_trend_score:  { type: "number" },
+          },
+        },
+        weights_used: { type: "object", description: "ScoreWeights that were applied", additionalProperties: true },
+        error:        { type: "string", description: "Error if summary.json not found or run_id mismatch" },
+      },
+    },
   },
 
   {
@@ -351,6 +538,14 @@ export const TOOLS = [
         complexity:    { type: "string", description: "Optional: match patterns whose condition includes this complexity" },
       },
       required: ["project_path"],
+    },
+    outputSchema: {
+      type: "object" as const,
+      description: "Filtered list of ExploitationPatterns",
+      properties: {
+        patterns: { type: "array", description: "Matching ExploitationPattern objects", items: { type: "object", additionalProperties: true } },
+        count:    { type: "number", description: "Number of matching patterns" },
+      },
     },
   },
   {
@@ -374,6 +569,16 @@ export const TOOLS = [
       },
       required: ["project_path", "pattern_id", "type", "condition", "action", "confidence", "supporting_runs"],
     },
+    outputSchema: {
+      type: "object" as const,
+      description: "Pattern proposal result",
+      properties: {
+        proposed:   { type: "boolean", description: "Whether the pattern was proposed" },
+        pattern_id: { type: "string", description: "The pattern identifier" },
+        status:     { type: "string", description: "Always 'candidate' for new proposals" },
+        error:      { type: "string", description: "Error if pattern_id already exists" },
+      },
+    },
   },
   {
     name: "sdd_promote_pattern",
@@ -389,6 +594,17 @@ export const TOOLS = [
       },
       required: ["project_path", "pattern_id"],
     },
+    outputSchema: {
+      type: "object" as const,
+      description: "Pattern promotion result",
+      properties: {
+        promoted:   { type: "boolean", description: "Whether the pattern was promoted" },
+        pattern_id: { type: "string", description: "The pattern identifier" },
+        status:     { type: "string", description: "New status (active) or current status" },
+        reason:     { type: "string", description: "Reason for rejection (insufficient runs/confidence, already active, decayed)" },
+        error:      { type: "string", description: "Error if pattern not found" },
+      },
+    },
   },
   {
     name: "sdd_tick_patterns",
@@ -402,6 +618,14 @@ export const TOOLS = [
         project_path: { type: "string" },
       },
       required: ["project_path"],
+    },
+    outputSchema: {
+      type: "object" as const,
+      description: "Pattern tick result",
+      properties: {
+        ticked:  { type: "boolean", description: "Always true on success" },
+        decayed: { type: "number", description: "Number of patterns that reached TTL=0 and were marked decayed" },
+      },
     },
   },
 
@@ -426,6 +650,17 @@ export const TOOLS = [
       },
       required: ["project_path", "evolution_id", "type", "description", "rationale", "supporting_data", "impact"],
     },
+    outputSchema: {
+      type: "object" as const,
+      description: "Evolution proposal result",
+      properties: {
+        proposed:       { type: "boolean", description: "Whether the evolution was proposed" },
+        evolution_id:   { type: "string", description: "The evolution identifier" },
+        requires_human: { type: "boolean", description: "Whether human approval is required" },
+        status:         { type: "string", description: "Always 'proposed' for new proposals" },
+        error:          { type: "string", description: "Error if evolution_id already exists" },
+      },
+    },
   },
   {
     name: "sdd_propose_experiment",
@@ -447,6 +682,16 @@ export const TOOLS = [
       },
       required: ["project_path", "experiment_id", "hypothesis", "type", "mutation", "expected_impact", "risk_level"],
     },
+    outputSchema: {
+      type: "object" as const,
+      description: "Experiment proposal result",
+      properties: {
+        proposed:      { type: "boolean", description: "Whether the experiment was proposed" },
+        experiment_id: { type: "string", description: "The experiment identifier" },
+        status:        { type: "string", description: "Always 'proposed' for new experiments" },
+        error:         { type: "string", description: "Error if another experiment is active or id already exists" },
+      },
+    },
   },
   {
     name: "sdd_evaluate_experiment",
@@ -463,6 +708,20 @@ export const TOOLS = [
         baseline_score:  { type: "number", description: "Mean pipeline_score of recent non-experimental runs (same feature_type)" },
       },
       required: ["project_path", "experiment_id", "result_score", "baseline_score"],
+    },
+    outputSchema: {
+      type: "object" as const,
+      description: "Experiment evaluation result with verdict",
+      properties: {
+        evaluated:      { type: "boolean", description: "Whether evaluation succeeded" },
+        experiment_id:  { type: "string", description: "The experiment identifier" },
+        verdict:        { type: "string", enum: ["promote", "discard", "retry"], description: "Evaluation verdict" },
+        status:         { type: "string", description: "New experiment status (completed or proposed for retry)" },
+        result_score:   { type: "number", description: "The experimental run score" },
+        baseline_score: { type: "number", description: "The baseline comparison score" },
+        retry_count:    { type: "number", description: "Number of retries so far" },
+        error:          { type: "string", description: "Error if experiment not found or already completed" },
+      },
     },
   },
 
@@ -483,6 +742,19 @@ export const TOOLS = [
       },
       required: ["project_path", "evolution_id", "decision"],
     },
+    outputSchema: {
+      type: "object" as const,
+      description: "Evolution approval/rejection result",
+      properties: {
+        evolution_id:    { type: "string", description: "The evolution identifier" },
+        status:          { type: "string", description: "New status: approved, approved_pending, or rejected" },
+        auto_applied:    { type: "boolean", description: "Whether weight changes were auto-applied (weight_adjust only)" },
+        weights_updated: { type: "array", items: { type: "string" }, description: "Weight keys that were updated (if auto-applied)" },
+        message:         { type: "string", description: "Additional context (e.g. requires manual application)" },
+        reason:          { type: "string", description: "Rejection reason (if rejected)" },
+        error:           { type: "string", description: "Error if evolution not found or wrong status" },
+      },
+    },
   },
   {
     name: "sdd_abandon_experiment",
@@ -497,6 +769,16 @@ export const TOOLS = [
         reason:         { type: "string", description: "Why the experiment is being abandoned" },
       },
       required: ["project_path", "experiment_id", "reason"],
+    },
+    outputSchema: {
+      type: "object" as const,
+      description: "Experiment abandonment result",
+      properties: {
+        abandoned:     { type: "boolean", description: "Whether the experiment was abandoned" },
+        experiment_id: { type: "string", description: "The experiment identifier" },
+        reason:        { type: "string", description: "The abandonment reason" },
+        error:         { type: "string", description: "Error if experiment not found or wrong status" },
+      },
     },
   },
   {
@@ -514,6 +796,18 @@ export const TOOLS = [
       },
       required: ["project_path", "pattern_id"],
     },
+    outputSchema: {
+      type: "object" as const,
+      description: "Pattern update result",
+      properties: {
+        updated:         { type: "boolean", description: "Whether the update succeeded" },
+        pattern_id:      { type: "string", description: "The pattern identifier" },
+        supporting_runs: { type: "number", description: "New supporting_runs count" },
+        confidence:      { type: "number", description: "Current confidence value" },
+        status:          { type: "string", description: "Current pattern status" },
+        error:           { type: "string", description: "Error if pattern not found, decayed, or invalid confidence" },
+      },
+    },
   },
   {
     name: "sdd_get_strategy",
@@ -529,6 +823,18 @@ export const TOOLS = [
         complexity:   { type: "string", description: "Feature complexity: low, medium, high, critical" },
       },
       required: ["project_path", "feature_type", "complexity"],
+    },
+    outputSchema: {
+      type: "object" as const,
+      description: "Pipeline strategy for the given feature context",
+      properties: {
+        feature_type:        { type: "string", description: "The queried feature type" },
+        complexity:          { type: "string", description: "The queried complexity" },
+        applicable_patterns: { type: "array", description: "Active patterns matching this context", items: { type: "object", additionalProperties: true } },
+        active_experiments:  { type: "array", description: "Experiments in proposed/running status", items: { type: "object", additionalProperties: true } },
+        current_weights:     { type: "object", description: "Current ScoreWeights (null if not customized)", additionalProperties: true },
+        recommendations:     { type: "array", items: { type: "string" }, description: "Actionable recommendations for the orchestrator" },
+      },
     },
   },
   {
@@ -546,6 +852,35 @@ export const TOOLS = [
         expected_outcome: { type: "string", description: "Optional: what was expected ('clean_pass', 'minor_fixes', etc.)" },
       },
       required: ["project_path", "feature_id"],
+    },
+    outputSchema: {
+      type: "object" as const,
+      description: "Structured retro report",
+      properties: {
+        feature_id:        { type: "string", description: "Feature identifier" },
+        run_id:            { type: "string", description: "Run identifier" },
+        outcome:           { type: "string", description: "Run outcome (pr_created, escalated, aborted)" },
+        expected_vs_actual: {
+          type: "object",
+          description: "Expected vs actual outcome comparison (null if no expected_outcome given)",
+          properties: {
+            expected: { type: "string" },
+            actual:   { type: "string" },
+            match:    { type: "boolean" },
+          },
+        },
+        pipeline_score:    { type: "number", description: "Composite pipeline score (null if not computed)" },
+        total_duration_ms: { type: "number", description: "Total run duration in milliseconds" },
+        total_fix_loops:   { type: "number", description: "Total fix loops across all phases" },
+        first_pass_rate:   { type: "number", description: "First-pass rate percentage (0-100)" },
+        phase_breakdown:   { type: "array", description: "Per-phase breakdown", items: { type: "object", additionalProperties: true } },
+        bottlenecks:       { type: "array", description: "Phases identified as bottlenecks", items: { type: "object", additionalProperties: true } },
+        patterns_confirmed:    { type: "array", items: { type: "string" }, description: "Active patterns confirmed by this run" },
+        patterns_contradicted: { type: "array", items: { type: "string" }, description: "Active patterns contradicted by this run" },
+        suggestions:       { type: "array", items: { type: "string" }, description: "Actionable suggestions" },
+        generated_at:      { type: "string", description: "ISO8601 timestamp when retro was generated" },
+        error:             { type: "string", description: "Error if summary.json not found" },
+      },
     },
   },
   {
@@ -565,6 +900,46 @@ export const TOOLS = [
         factors:      { type: "object", description: "Optional: influencing factors (e.g. {spec_clarity: 0.8, test_coverage: 0.6})", additionalProperties: { type: "number" } },
       },
       required: ["project_path", "feature_id", "phase", "confidence", "reasoning"],
+    },
+    outputSchema: {
+      type: "object" as const,
+      description: "Phase confidence persistence result",
+      properties: {
+        persisted:  { type: "boolean", description: "Whether the entry was persisted" },
+        feature_id: { type: "string", description: "Feature identifier" },
+        phase:      { type: "string", description: "Phase name" },
+        confidence: { type: "number", description: "The assigned confidence score" },
+        reasoning:  { type: "string", description: "The reasoning provided" },
+        factors:    { type: "object", description: "Influencing factors (null if not provided)", additionalProperties: { type: "number" } },
+        updated_at: { type: "string", description: "ISO8601 timestamp" },
+        error:      { type: "string", description: "Error if confidence out of range" },
+      },
+    },
+  },
+  {
+    name: "sdd_set_golden",
+    description:
+      "Set the golden run benchmark from a completed feature's summary. " +
+      "Copies summary.json to .sdd/analytics/golden.json. " +
+      "sdd_compute_score will compare future runs against this golden baseline.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        project_path: { type: "string", description: "Absolute path to the project root" },
+        feature_id: { type: "string", description: "Optional: feature to use as golden. Defaults to last completed run." },
+      },
+      required: ["project_path"],
+    },
+    outputSchema: {
+      type: "object" as const,
+      description: "Golden run benchmark result",
+      properties: {
+        set:            { type: "boolean", description: "Whether the golden benchmark was set" },
+        golden_run_id:  { type: "string", description: "The run_id of the golden benchmark" },
+        golden_score:   { type: "number", description: "The pipeline_score of the golden run" },
+        golden_path:    { type: "string", description: "Path to the golden.json file" },
+        error:          { type: "string", description: "Error if summary not found" },
+      },
     },
   },
 
@@ -614,6 +989,15 @@ export const TOOLS = [
       },
       required: ["project_path", "metrics"],
     },
+    outputSchema: {
+      type: "object" as const,
+      description: "Metrics emission confirmation",
+      properties: {
+        emitted: { type: "boolean", description: "Always true on success" },
+        run_id:  { type: "string", description: "The run_id from the emitted metrics" },
+        phase:   { type: "string", description: "The phase from the emitted metrics" },
+      },
+    },
   },
   {
     name: "sdd_get_run_summary",
@@ -630,6 +1014,28 @@ export const TOOLS = [
         last_n_runs:  { type: "number", description: "Optional: return last N historical summaries from analytics/history.jsonl" },
       },
       required: ["project_path", "feature_id"],
+    },
+    outputSchema: {
+      type: "object" as const,
+      description: "RunSummary (fresh computation) or {summaries, runs_analyzed} (historical query)",
+      properties: {
+        run_id:            { type: "string", description: "Run identifier (fresh mode)" },
+        feature_id:        { type: "string", description: "Feature identifier" },
+        feature_type:      { type: "string", description: "Feature type" },
+        complexity:        { type: "string", description: "Feature complexity" },
+        outcome:           { type: "string", description: "Run outcome: pr_created, escalated, aborted" },
+        total_duration_ms: { type: "number", description: "Total duration in milliseconds" },
+        total_tokens:      { type: "number", description: "Total tokens consumed (null if not available)" },
+        phases_executed:   { type: "array", items: { type: "string" }, description: "Phases that were executed" },
+        phases_skipped:    { type: "array", items: { type: "string" }, description: "Phases that were skipped" },
+        total_fix_loops:   { type: "number", description: "Total fix loops across all phases" },
+        first_pass_rate:   { type: "number", description: "First-pass rate percentage (0-100)" },
+        pipeline_score:    { type: "number", description: "Composite score (null until computed)" },
+        phase_metrics:     { type: "array", description: "Per-phase PhaseMetrics", items: { type: "object", additionalProperties: true } },
+        summaries:         { type: "array", description: "Historical summaries (last_n_runs mode)", items: { type: "object", additionalProperties: true } },
+        runs_analyzed:     { type: "number", description: "Count of returned summaries (last_n_runs mode)" },
+        error:             { type: "string", description: "Error if no metrics found" },
+      },
     },
   },
   {
@@ -649,6 +1055,30 @@ export const TOOLS = [
         date_to:      { type: "string", description: "Optional: ISO8601 end date filter (inclusive)" },
       },
       required: ["project_path"],
+    },
+    outputSchema: {
+      type: "object" as const,
+      description: "Cross-run analytics results",
+      properties: {
+        filter:                         { type: "object", description: "Applied filters", additionalProperties: true },
+        runs_analyzed:                  { type: "number", description: "Number of runs included in analysis" },
+        avg_duration_by_phase:          { type: "object", description: "Average duration per phase in ms", additionalProperties: { type: "number" } },
+        avg_fix_loops_by_feature_type:  { type: "object", description: "Average fix loops per feature type", additionalProperties: { type: "number" } },
+        first_pass_rate_history:        { type: "number", description: "Overall average first-pass rate" },
+        high_variance_phases:           { type: "array", items: { type: "string" }, description: "Phases with high duration variance" },
+        trends: {
+          type: "array",
+          description: "Trend analysis (requires >= 4 runs)",
+          items: {
+            type: "object",
+            properties: {
+              metric:      { type: "string" },
+              direction:   { type: "string", enum: ["improving", "regressing", "stable"] },
+              data_points: { type: "number" },
+            },
+          },
+        },
+      },
     },
   },
   {
@@ -677,6 +1107,29 @@ export const TOOLS = [
       },
       required: ["project_path", "feature_id"],
     },
+    outputSchema: {
+      type: "object" as const,
+      description: "Threshold check results with alerts",
+      properties: {
+        alerts: {
+          type: "array",
+          description: "Threshold violations",
+          items: {
+            type: "object",
+            properties: {
+              level:         { type: "string", enum: ["warning", "critical"] },
+              metric:        { type: "string", description: "Metric name that crossed threshold" },
+              phase:         { type: "string", description: "Phase name (for per-phase checks)" },
+              current_value: { type: "number", description: "Current metric value" },
+              threshold:     { type: "number", description: "Threshold that was crossed" },
+              message:       { type: "string", description: "Human-readable alert message" },
+            },
+          },
+        },
+        checked_at: { type: "string", description: "ISO8601 timestamp of the check" },
+        error:      { type: "string", description: "Error if no metrics found" },
+      },
+    },
   },
   {
     name: "sdd_estimate_cost",
@@ -704,6 +1157,29 @@ export const TOOLS = [
       },
       required: ["project_path"],
     },
+    outputSchema: {
+      type: "object" as const,
+      description: "Cost estimation breakdown",
+      properties: {
+        total_cost_usd: { type: "number", description: "Total estimated cost in USD" },
+        phases: {
+          type: "array",
+          description: "Per-phase cost breakdown",
+          items: {
+            type: "object",
+            properties: {
+              phase:      { type: "string" },
+              model:      { type: "string" },
+              tokens_in:  { type: "number" },
+              tokens_out: { type: "number" },
+              cost_usd:   { type: "number" },
+            },
+          },
+        },
+        model_breakdown: { type: "object", description: "Cost per model", additionalProperties: { type: "number" } },
+        error:           { type: "string", description: "Error if no metrics or history found" },
+      },
+    },
   },
   {
     name: "sdd_get_live_status",
@@ -718,6 +1194,20 @@ export const TOOLS = [
         feature_id:   { type: "string", description: "Feature identifier" },
       },
       required: ["project_path", "feature_id"],
+    },
+    outputSchema: {
+      type: "object" as const,
+      description: "Live execution status for the feature",
+      properties: {
+        status:               { type: "string", enum: ["running", "idle"], description: "Whether a phase is currently executing" },
+        feature_state:        { type: "string", description: "Current feature lifecycle state" },
+        current_phase:        { type: "string", description: "Phase currently executing (null if idle)" },
+        started_at:           { type: "string", description: "ISO8601 timestamp when current phase started" },
+        elapsed_seconds:      { type: "number", description: "Seconds elapsed since phase started" },
+        last_completed_phase: { type: "string", description: "Most recently completed phase (null if none)" },
+        last_completed_at:    { type: "string", description: "ISO8601 timestamp of last completion" },
+        error:                { type: "string", description: "Error if feature not found" },
+      },
     },
   },
   {
@@ -736,6 +1226,49 @@ export const TOOLS = [
       },
       required: ["project_path", "run_id_a", "run_id_b"],
     },
+    outputSchema: {
+      type: "object" as const,
+      description: "Side-by-side run comparison",
+      properties: {
+        run_a: {
+          type: "object",
+          description: "Summary of run A",
+          properties: {
+            id:             { type: "string" },
+            feature_id:     { type: "string" },
+            outcome:        { type: "string" },
+            pipeline_score: { type: "number" },
+          },
+        },
+        run_b: {
+          type: "object",
+          description: "Summary of run B",
+          properties: {
+            id:             { type: "string" },
+            feature_id:     { type: "string" },
+            outcome:        { type: "string" },
+            pipeline_score: { type: "number" },
+          },
+        },
+        diffs: { type: "object", description: "Per-metric diffs with a, b, diff, diff_pct", additionalProperties: true },
+        phase_diffs: {
+          type: "array",
+          description: "Per-phase metric diffs",
+          items: {
+            type: "object",
+            properties: {
+              phase:  { type: "string" },
+              metric: { type: "string" },
+              a:      { type: "number" },
+              b:      { type: "number" },
+              diff:   { type: "number" },
+            },
+          },
+        },
+        better_run: { type: "string", description: "Run ID of the better run (or 'tied')" },
+        error:      { type: "string", description: "Error if a run is not found" },
+      },
+    },
   },
   {
     name: "sdd_detect_anomaly",
@@ -752,6 +1285,32 @@ export const TOOLS = [
         sensitivity:  { type: "number", description: "Number of standard deviations for anomaly detection (default: 2.0)" },
       },
       required: ["project_path", "feature_id"],
+    },
+    outputSchema: {
+      type: "object" as const,
+      description: "Anomaly detection result",
+      properties: {
+        is_anomaly:  { type: "boolean", description: "Whether any metric is anomalous" },
+        status:      { type: "string", enum: ["analyzed", "insufficient_data"], description: "Analysis status" },
+        sensitivity: { type: "number", description: "The sensitivity threshold used" },
+        anomalies: {
+          type: "array",
+          description: "Metrics flagged as anomalous",
+          items: {
+            type: "object",
+            properties: {
+              metric:  { type: "string" },
+              value:   { type: "number" },
+              mean:    { type: "number" },
+              stddev:  { type: "number" },
+              z_score: { type: "number" },
+            },
+          },
+        },
+        run_percentile: { type: "number", description: "Percentile rank vs historical runs (0-100)" },
+        message:        { type: "string", description: "Status message (for insufficient_data)" },
+        error:          { type: "string", description: "Error if summary.json not found" },
+      },
     },
   },
   {
@@ -771,6 +1330,35 @@ export const TOOLS = [
         },
       },
       required: ["project_path", "metrics"],
+    },
+    outputSchema: {
+      type: "object" as const,
+      description: "Validation result with errors and warnings",
+      properties: {
+        valid: { type: "boolean", description: "Whether the metrics object passed all required validations" },
+        errors: {
+          type: "array",
+          description: "Validation errors (missing/invalid fields)",
+          items: {
+            type: "object",
+            properties: {
+              field:   { type: "string", description: "Field name" },
+              message: { type: "string", description: "Error description" },
+            },
+          },
+        },
+        warnings: {
+          type: "array",
+          description: "Non-blocking warnings (unknown fields)",
+          items: {
+            type: "object",
+            properties: {
+              field:   { type: "string", description: "Field name" },
+              message: { type: "string", description: "Warning description" },
+            },
+          },
+        },
+      },
     },
   },
 ];
@@ -818,6 +1406,7 @@ export const HANDLER_MAP: Record<string, HandlerFn> = {
   sdd_get_strategy:         handleGetStrategy,
   sdd_run_retro:            handleRunRetro,
   sdd_phase_confidence:     handlePhaseConfidence,
+  sdd_set_golden:           handleSetGolden,
 };
 
 // ─── Server setup ────────────────────────────────────────────────

@@ -538,3 +538,269 @@ export interface CompositeScore {
   };
   weights_used: ScoreWeights;
 }
+
+// ─── MCP Tool Output Types ───────────────────────────────────────
+
+export interface GetStateOutput {
+  feature_id?: string;
+  error?: string;
+  // When feature_id is provided, returns FeatureEntry fields spread at top level.
+  // When no feature_id, returns full StateJson.
+}
+
+export interface TransitionOutput {
+  success: boolean;
+  new_state?: string;
+  error?: { code: string; message: string; allowed_transitions: string[] };
+}
+
+export interface GetContractOutput {
+  // Returns StageContract fields or error
+  error?: string;
+}
+
+export interface EvaluateGateOutput {
+  passed: boolean;
+  checks: Array<{ name: string; passed: boolean; detail: string }>;
+  needs_semantic_validation?: { check: string; description: string };
+  error?: string;
+}
+
+export interface ClassifyFailureOutput {
+  category: "implementation_bug" | "spec_gap" | "infra_issue";
+  confidence: "high" | "medium" | "low";
+  reasoning: string;
+}
+
+export interface DeltaCheckOutput {
+  result: "continue" | "abort";
+  previous_failures?: number;
+  reason: string;
+}
+
+export interface LogEventOutput {
+  logged: boolean;
+  timestamp: string;
+}
+
+export interface MemoryReadOutput {
+  content: string;
+  section: string;
+  scope: "project" | "user";
+}
+
+export interface MemoryWriteOutput {
+  written: boolean;
+  timestamp?: string;
+  reason?: string;
+}
+
+export interface TickDecayOutput {
+  patterns_removed: number;
+  explorations_expired: number;
+  total_removed: number;
+}
+
+export interface UpdateTaskOutput {
+  updated: boolean;
+  task_id: string;
+  status: string;
+  error?: string;
+}
+
+export interface UpdateFeatureOutput {
+  updated: boolean;
+  fields: string[];
+  error?: string;
+}
+
+export interface AppendSignalOutput {
+  appended: boolean;
+  signal_id: string;
+  in_state: boolean;
+}
+
+export interface EmitMetricsOutput {
+  emitted: boolean;
+  run_id: string;
+  phase: string;
+}
+
+export interface GetRunSummaryOutput {
+  // When last_n_runs is provided: { summaries, runs_analyzed }
+  // Otherwise: full RunSummary or error
+  error?: string;
+}
+
+export interface GetAnalyticsOutput extends AnalyticsResult {}
+
+export interface CheckThresholdsOutput {
+  alerts: Array<{
+    level: "warning" | "critical";
+    metric: string;
+    phase?: string;
+    current_value: number;
+    threshold: number;
+    message: string;
+  }>;
+  checked_at: string;
+  error?: string;
+}
+
+export interface EstimateCostOutput {
+  total_cost_usd: number;
+  phases: Array<{ phase: string; model: string; tokens_in: number | null; tokens_out: number | null; cost_usd: number }>;
+  model_breakdown: Record<string, number>;
+  error?: string;
+}
+
+export interface GetLiveStatusOutput {
+  status: "running" | "idle";
+  feature_state?: string;
+  current_phase?: string | null;
+  started_at?: string | null;
+  elapsed_seconds?: number | null;
+  last_completed_phase?: string | null;
+  last_completed_at?: string | null;
+  error?: string;
+}
+
+export interface CompareRunsOutput {
+  run_a: { id: string; feature_id: string; outcome: string; pipeline_score: number | null };
+  run_b: { id: string; feature_id: string; outcome: string; pipeline_score: number | null };
+  diffs: Record<string, { a: number | null; b: number | null; diff: number | null; diff_pct: number | null }>;
+  phase_diffs: Array<{ phase: string; metric: string; a: number; b: number; diff: number }>;
+  better_run: string;
+  error?: string;
+}
+
+export interface DetectAnomalyOutput {
+  is_anomaly: boolean;
+  status: "analyzed" | "insufficient_data";
+  sensitivity?: number;
+  anomalies?: Array<{ metric: string; value: number; mean: number; stddev: number; z_score: number }>;
+  run_percentile?: number | null;
+  message?: string;
+  error?: string;
+}
+
+export interface ValidateMetricsOutput {
+  valid: boolean;
+  errors: Array<{ field: string; message: string }>;
+  warnings: Array<{ field: string; message: string }>;
+}
+
+export interface GetPatternsOutput {
+  patterns: ExploitationPattern[];
+  count: number;
+}
+
+export interface ProposePatternOutput {
+  proposed: boolean;
+  pattern_id: string;
+  status: "candidate";
+  error?: string;
+}
+
+export interface PromotePatternOutput {
+  promoted: boolean;
+  pattern_id?: string;
+  status?: string;
+  reason?: string;
+  error?: string;
+}
+
+export interface TickPatternsOutput {
+  ticked: boolean;
+  decayed: number;
+}
+
+export interface ProposeExperimentOutput {
+  proposed: boolean;
+  experiment_id: string;
+  status: "proposed";
+  error?: string;
+}
+
+export interface EvaluateExperimentOutput {
+  evaluated: boolean;
+  experiment_id: string;
+  verdict: "promote" | "discard" | "retry";
+  status: string;
+  result_score: number;
+  baseline_score: number;
+  retry_count: number;
+  error?: string;
+}
+
+export interface ProposeEvolutionOutput {
+  proposed: boolean;
+  evolution_id: string;
+  requires_human: boolean;
+  status: "proposed";
+  error?: string;
+}
+
+export interface ApproveEvolutionOutput {
+  evolution_id: string;
+  status: string;
+  auto_applied?: boolean;
+  weights_updated?: string[];
+  message?: string;
+  reason?: string;
+  error?: string;
+}
+
+export interface AbandonExperimentOutput {
+  abandoned: boolean;
+  experiment_id: string;
+  reason: string;
+  error?: string;
+}
+
+export interface UpdatePatternOutput {
+  updated: boolean;
+  pattern_id: string;
+  supporting_runs: number;
+  confidence: number;
+  status: string;
+  error?: string;
+}
+
+export interface GetStrategyOutput {
+  feature_type: string;
+  complexity: string;
+  applicable_patterns: ExploitationPattern[];
+  active_experiments: Experiment[];
+  current_weights: ScoreWeights | null;
+  recommendations: string[];
+}
+
+export interface RunRetroOutput {
+  feature_id: string;
+  run_id: string;
+  outcome: string;
+  expected_vs_actual: { expected: string | null; actual: string; match: boolean } | null;
+  pipeline_score: number | null;
+  total_duration_ms: number;
+  total_fix_loops: number;
+  first_pass_rate: number;
+  phase_breakdown: Array<{ phase: string; duration_ms: number; fix_loops: number; skipped: boolean; gate_result: string }>;
+  bottlenecks: Array<{ phase: string; reason: string; duration_ms: number; fix_loops: number }>;
+  patterns_confirmed: string[];
+  patterns_contradicted: string[];
+  suggestions: string[];
+  generated_at: string;
+  error?: string;
+}
+
+export interface PhaseConfidenceOutput {
+  persisted: boolean;
+  feature_id: string;
+  phase: string;
+  confidence: number;
+  reasoning: string;
+  factors: Record<string, number> | null;
+  updated_at: string;
+  error?: string;
+}
