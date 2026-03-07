@@ -128,7 +128,9 @@ USER (Claude Code CLI)
 │              tasks.ts ──── observability.ts ── metacognition.ts │
 │              utils.ts (fileExists · parseJsonl)                 │
 │                                                                 │
-│  ── 24 tools ──────────────────────────────── consumer ──────── │
+│  ── 39 tools ──────────────────────────────── consumer ──────── │
+│                                                                 │
+│  CORE PIPELINE (13)                                             │
 │  sdd_get_state          ◄── all agents                          │
 │  sdd_transition         ◄── orchestrator · impl-engine          │
 │  sdd_get_contract       ◄── orchestrator                        │
@@ -142,9 +144,19 @@ USER (Claude Code CLI)
 │  sdd_append_signal      ◄── plan/impl/verif/adv-reviewer        │
 │  sdd_update_task        ◄── impl-engine                         │
 │  sdd_update_feature     ◄── orchestrator                        │
+│                                                                 │
+│  OBSERVABILITY (9)                                              │
 │  sdd_emit_metrics       ◄── orchestrator (per phase)            │
 │  sdd_get_run_summary    ◄── orchestrator (post-pipeline)        │
 │  sdd_get_analytics      ◄── orchestrator · meta-reviewer        │
+│  sdd_check_thresholds   ◄── orchestrator (loop/duration guard)  │
+│  sdd_estimate_cost      ◄── orchestrator (post-pipeline)        │
+│  sdd_get_live_status    ◄── orchestrator · auto-status skill    │
+│  sdd_compare_runs       ◄── meta-reviewer · analyst             │
+│  sdd_detect_anomaly     ◄── orchestrator (post-pipeline)        │
+│  sdd_validate_metrics   ◄── orchestrator (pre-persist)          │
+│                                                                 │
+│  METACOGNITION (14)                                             │
 │  sdd_compute_score      ◄── orchestrator (post-pipeline)        │
 │  sdd_get_patterns       ◄── orchestrator (run-start)            │
 │  sdd_propose_pattern    ◄── orchestrator (run-close)            │
@@ -153,6 +165,17 @@ USER (Claude Code CLI)
 │  sdd_propose_experiment ◄── orchestrator (exploration runs)     │
 │  sdd_evaluate_experiment◄── orchestrator (post-experiment run)  │
 │  sdd_propose_evolution  ◄── opus-meta-reviewer                  │
+│  sdd_approve_evolution  ◄── orchestrator (human gate)           │
+│  sdd_abandon_experiment ◄── orchestrator (cancel without eval)  │
+│  sdd_update_pattern     ◄── orchestrator (supporting_runs++)    │
+│  sdd_get_strategy       ◄── orchestrator (run-start)            │
+│  sdd_run_retro          ◄── haiku-analyst (post-pipeline)       │
+│  sdd_phase_confidence   ◄── orchestrator (per phase)            │
+│                                                                 │
+│  INFRASTRUCTURE (3)                                             │
+│  sdd_set_golden         ◄── orchestrator (benchmark run)        │
+│  sdd_get_manifest       ◄── orchestrator (drift detection)      │
+│  sdd_breadcrumb         ◄── all subagents (audit trail)         │
 └──────────────────────────┬──────────────────────────────────────┘
                            │  R/W
                            ▼
@@ -249,6 +272,17 @@ Each pipeline run feeds a learning loop that adapts future runs:
 
 The score formula is stable across runs. Only `score_weights.json` is adjustable — and only by ±0.05 per review cycle, with full audit trail.
 
+Golden run benchmarks (`sdd_set_golden`) let `sdd_compute_score` compare the current run against a known-good baseline. Subagent breadcrumbs (`sdd_breadcrumb`) record decision points across the pipeline for post-run audit. Z-score anomaly detection and threshold checks catch regressions automatically.
+
+### Memory intelligence
+
+Memory operations include three defensive layers:
+
+- **Provenance metadata** — every entry records agent, run_id, feature_id, and confidence
+- **Prompt injection sanitization** — blocklist filter on all memory writes
+- **Jaccard similarity consolidation** — deduplicates entries above similarity threshold on write
+- **Extraction pattern validation** — structured filter ensures reads return well-formed data
+
 ## State machine
 
 Transition graph enforced in code (`AGENT_PERMISSIONS` in `engine/src/state.ts`), not in `state.json`:
@@ -298,7 +332,7 @@ sdd-autopilot/
 │
 ├── engine/                  # MCP server (TypeScript, stdio transport)
 │   ├── src/
-│   │   ├── index.ts         # Entry point — 24 sdd_* tools registered
+│   │   ├── index.ts         # Entry point — 39 sdd_* tools registered
 │   │   ├── handlers.ts      # Core deterministic tool handlers
 │   │   ├── state.ts         # StateManager + AGENT_PERMISSIONS governance
 │   │   ├── memory.ts        # Two-layer memory (project + user scope)
@@ -308,7 +342,14 @@ sdd-autopilot/
 │   │   ├── types.ts         # Shared types (FindingSeverity, PhaseMetrics, …)
 │   │   ├── utils.ts         # Shared utilities (fileExists, parseJsonl)
 │   │   └── contracts.json   # Pipeline phase definitions (single source of truth)
-│   ├── test-e2e.mjs         # Mechanical tests (273 assertions, no API calls)
+│   ├── tests/
+│   │   └── e2e/             # Behavioral pipeline tests (20 tests)
+│   ├── test-e2e.mjs         # Mechanical tests (270+ assertions, no API calls)
+│   ├── docs/
+│   │   └── GAP-09-READINESS.md  # Token & cost tracking readiness doc
+│   ├── scripts/
+│   │   └── compute-tools-hash.mjs  # SHA-256 hash of tool definitions
+│   ├── tools-manifest.json  # Tool manifest for drift detection
 │   ├── package.json
 │   └── tsconfig.json
 ```
@@ -333,15 +374,21 @@ sdd-autopilot/
 | `sdd_update_task` | Mark a task as pending / in-progress / completed |
 | `sdd_update_feature` | Persist feature metadata: branch, worktree_path, plan_path, tasks_path, etc. |
 
-### Observability (3 tools)
+### Observability (9 tools)
 
 | Tool | Purpose |
 |------|---------|
 | `sdd_emit_metrics` | Record PhaseMetrics for a completed phase (duration, fix_loops, outcome) |
 | `sdd_get_run_summary` | Aggregate metrics.jsonl → RunSummary (first_pass_rate, phases_skipped, total_fix_loops) |
 | `sdd_get_analytics` | Cross-run analytics: score trends, high-variance phases, avg duration by phase |
+| `sdd_check_thresholds` | Detect when metrics cross thresholds (fix loops, duration ratio, first pass rate) |
+| `sdd_estimate_cost` | Estimate cost in USD from token consumption |
+| `sdd_get_live_status` | Query which phase is currently executing |
+| `sdd_compare_runs` | Compare two pipeline runs side by side |
+| `sdd_detect_anomaly` | Z-score anomaly detection vs historical distribution |
+| `sdd_validate_metrics` | Validate PhaseMetrics before persisting |
 
-### Metacognition (8 tools)
+### Metacognition (14 tools)
 
 | Tool | Purpose |
 |------|---------|
@@ -353,6 +400,20 @@ sdd-autopilot/
 | `sdd_propose_experiment` | Propose a controlled experiment (one-active constraint enforced) |
 | `sdd_evaluate_experiment` | Set verdict on the active experiment (promote / discard / retry, max 2 retries) |
 | `sdd_propose_evolution` | Propose a PipelineEvolution; structural types always require human approval |
+| `sdd_approve_evolution` | Approve or reject a PipelineEvolution |
+| `sdd_abandon_experiment` | Cancel an experiment without evaluating |
+| `sdd_update_pattern` | Increment supporting_runs / update confidence on a pattern |
+| `sdd_get_strategy` | Read active patterns + experiments + weights for run strategy |
+| `sdd_run_retro` | Generate structured retro report for a completed run |
+| `sdd_phase_confidence` | Assign confidence score to phase output |
+
+### Infrastructure (3 tools)
+
+| Tool | Purpose |
+|------|---------|
+| `sdd_set_golden` | Set golden run benchmark; `sdd_compute_score` compares against it |
+| `sdd_get_manifest` | Get SHA-256 hash of tool definitions for version drift detection |
+| `sdd_breadcrumb` | Record subagent decision breadcrumbs for audit trail |
 
 ## Installation
 
@@ -414,11 +475,17 @@ Shows feature states, task progress, verification/review attempt counts, active 
 ```bash
 cd engine
 npm run build
+
+# Mechanical tests — all 39 tool handlers
 node test-e2e.mjs
-# → 273/273 PASS
+# → 270+ assertions PASS
+
+# Behavioral pipeline tests — full lifecycle scenarios
+npm run test:e2e
+# → 20 tests covering pipeline end-to-end behavior
 ```
 
-273 assertions covering all 24 MCP tool handlers — core pipeline, state machine boundaries, memory, signal routing, gate evaluation, delta check, observability (PhaseMetrics, RunSummary, cross-run analytics), metacognition (composite scoring, exploitation patterns, experiments, pipeline evolution) — all without any API calls.
+270+ assertions covering all 39 MCP tool handlers — core pipeline, state machine boundaries, memory (provenance, sanitization, consolidation), signal routing, gate evaluation, delta check, observability (PhaseMetrics, RunSummary, cross-run analytics, thresholds, anomaly detection), metacognition (composite scoring, exploitation patterns, experiments, pipeline evolution, golden benchmarks), and infrastructure (manifests, breadcrumbs) — all without any API calls. The 20 behavioral tests validate full pipeline lifecycle scenarios including multi-phase transitions and fix loops.
 
 ## License
 
