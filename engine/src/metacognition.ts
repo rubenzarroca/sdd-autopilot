@@ -906,27 +906,52 @@ export async function handleGetStrategy(params: {
   else if (!proposedExperiment) decision = "exploit";
   else decision = explore_score > exploit_score ? "explore" : "exploit";
 
-  // Build recommendations based on decision
-  const recommendations: string[] = [];
-  if (decision === "exploit" && applicable.length > 0) {
+  // Resolve pattern mutations so the orchestrator can apply them directly
+  const phases_to_skip: string[] = [];
+  const model_overrides: Record<string, string> = {};
+  const gate_overrides: Record<string, string> = {};
+  const prompt_injections: Array<{ pattern_id: string; phase: string; text: string }> = [];
+
+  if (decision === "exploit") {
     for (const p of applicable) {
-      recommendations.push(`[EXPLOIT] Pattern "${p.pattern_id}" (confidence: ${p.confidence.toFixed(3)}): ${p.action}`);
+      const action = p.action.toLowerCase();
+      switch (p.type) {
+        case "skip_phase": {
+          const m = action.match(/skip\s+(?:phase[= ]*)?(\w+)/);
+          if (m) phases_to_skip.push(m[1]);
+          break;
+        }
+        case "model_swap": {
+          const m = action.match(/use\s+(\w+)\s+for\s+(\w+)/);
+          if (m) model_overrides[m[2]] = m[1];
+          break;
+        }
+        case "gate_adjust": {
+          const m = action.match(/(\w+)\s+gate\s+to\s+(\d+%?)/);
+          if (m) gate_overrides[m[1]] = m[2];
+          break;
+        }
+        case "prompt_tuning": {
+          const m = p.action.match(/(?:for|in)\s+(\w+)/i);
+          prompt_injections.push({
+            pattern_id: p.pattern_id,
+            phase: m ? m[1] : "all",
+            text: p.action,
+          });
+          break;
+        }
+      }
     }
-  }
-  if (decision === "explore" && proposedExperiment) {
-    recommendations.push(`[EXPLORE] Experiment "${proposedExperiment.experiment_id}": ${proposedExperiment.hypothesis}`);
-  }
-  if (applicable.length === 0 && !proposedExperiment) {
-    recommendations.push("No active patterns or experiments apply. Run standard pipeline.");
   }
 
   return {
     feature_type: params.feature_type,
     complexity: params.complexity,
-    applicable_patterns: applicable,
+    has_adaptations: applicable.length > 0 || activeExperiments.length > 0,
+    mutations: { phases_to_skip, model_overrides, gate_overrides, prompt_injections },
+    applicable_patterns: applicable.map(p => ({ pattern_id: p.pattern_id, type: p.type, confidence: p.confidence })),
     active_experiments: activeExperiments,
     current_weights: currentWeights,
-    recommendations,
     exploration_decision: {
       exploit_score: Math.round(exploit_score * 1000) / 1000,
       explore_score: Math.round(explore_score * 1000) / 1000,

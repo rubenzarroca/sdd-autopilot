@@ -17,7 +17,7 @@ You are the orchestrator for the SDD Autopilot pipeline. You coordinate the full
 
 0. **Project context loading** (once per run, before anything else):
 
-   a. **Constitution** — read `.sdd/constitution.md`:
+   a. **Constitution** — read `constitution.md` from the **project root** (i.e. `{project_path}/constitution.md`):
       - If exists: extract constraints as an array of rules. Each paragraph or bullet that expresses a non-negotiable constraint becomes one entry. Store as `project_constraints` (array of strings).
         Example extractions:
         - "Never expose PII without explicit consent"
@@ -81,7 +81,7 @@ For each phase:
 1. Call `mcp__sdd-autopilot__sdd_get_state` to read the current feature state
 2. Call `mcp__sdd-autopilot__sdd_get_contract` for the current phase to get: required inputs, optional inputs, gate checks, pair_review config, fix_loop config
 3. Call `mcp__sdd-autopilot__sdd_memory_read` with the memory sections indicated by the contract's optional inputs
-4. Read the artifact files indicated as required inputs by the contract
+4. Read ONLY the artifact files listed in the contract's `input.required` array. **NEVER use the Agent tool with Explore, NEVER call Read/Grep/Glob to "gather context" for a subagent.** Subagents have their own tools to discover what they need. The orchestrator's job is to pass contract inputs, not to pre-research the codebase.
 5. If the contract has `pair_review.enabled = true`:
    a. Launch the phase's subagent with the prepared context
    b. Launch `opus-coach` with the produced artifact and the stage name
@@ -637,129 +637,31 @@ After step 9 (sdd_memory_write), proceed to the Adaptive Run Close sequence.
 
 ## Adaptive Orchestrator
 
-The adaptive orchestrator modifies pipeline behavior based on learned patterns and experiments. It runs two scripted sequences: one at run start (before specify) and one at run close (after post-pipeline). The orchestrator reads this section at every run and executes it deterministically.
+Runs once after triage, before specify. Modifies pipeline based on learned patterns and experiments.
 
 ### ADAPTIVE RUN START
 
-Execute this sequence after triage completes and before the specify phase begins. All values from triage (`feature_type`, `complexity`) must be available.
+Call `sdd_get_strategy(project_path, feature_type, complexity)`. Store `applicable_patterns`, `active_experiments`, `exploration_decision` for the run.
 
-**Step 1 -- Get strategy (Thompson Sampling decision):**
-```
-strategy = mcp__sdd-autopilot__sdd_get_strategy(
-  project_path:  "{project_path}",
-  feature_type:  "{feature_type from triage}",
-  complexity:    "{complexity from triage}"
-)
-applicable_patterns   = strategy.applicable_patterns
-active_experiments    = strategy.active_experiments
-exploration_decision  = strategy.exploration_decision
-```
-Store `applicable_patterns` in memory for this pipeline run -- it is needed at run close for `sdd_update_pattern`.
-Store `exploration_decision` -- it determines exploit vs explore mode via Thompson Sampling.
+**If `has_adaptations` is false → skip straight to specify.** Nothing to adapt.
 
-The `exploration_decision` is **authoritative**. It uses Thompson Sampling over the Beta distributions of pattern outcomes to decide probabilistically whether to exploit known patterns or explore a new experiment. Do NOT override it with a fixed rule (e.g., `run_count % 5`). The decision fields are:
-- `exploit_score`: average Thompson sample across active patterns (higher = patterns are working well)
-- `explore_score`: Thompson sample for the proposed experiment (uniform prior for unknowns)
-- `decision`: `"exploit"` or `"explore"` — whichever scored higher
-- `method`: always `"thompson_sampling"`
-- `pattern_samples`: per-pattern Thompson samples for debugging
+Otherwise, apply these steps in order:
 
-**Step 2 -- Apply pattern mutations:**
-For each pattern in `applicable_patterns`, apply based on `pattern.type`:
+1. **Apply resolved mutations** from `strategy.mutations` — the server already parsed the patterns:
+   - `phases_to_skip`: remove each listed phase from the sequence, log `phase_skipped` event, emit metrics with `gate_result: "skip"`
+   - `model_overrides`: `{ "plan": "haiku" }` → use that model for that phase
+   - `gate_overrides`: `{ "verify": "80%" }` → pass threshold to subagent context
+   - `prompt_injections`: inject each entry's `text` into the target phase's subagent context under `## Pattern-Driven Instructions`
 
-- `type="skip_phase"`: Parse `pattern.action` to identify the phase to skip (e.g., "skip verify for low-complexity api features"). Remove that phase from the execution sequence. Log:
-  ```
-  sdd_log_event(project_path, feature_id, event_type="phase_skipped", phase="{skipped_phase}", agent_id="orchestrator",
-    data={ pattern_id: "{pattern.pattern_id}", reason: "exploitation_pattern" })
-  ```
-  When emitting metrics for the skipped phase, use `gate_result: "skip"`.
+2. **Abandon stale experiments** — for each experiment in `active_experiments`, abandon via `sdd_abandon_experiment` if: context mismatch (experiment `feature_type` ≠ triage `feature_type`) OR stale (`status="running"` + 3+ runs without evaluation).
 
-- `type="model_swap"`: Parse `pattern.action` to identify the phase and target model (e.g., "use haiku for plan phase on low-complexity"). Override the model in the phase sequence table for that phase.
+3. **Apply experiment** (only if `exploration_decision.decision == "explore"` AND a proposed experiment exists):
+   - `risk_level` low/medium: apply `experiment.mutation`, mark `"running"`, store `experiment_applied`
+   - `risk_level` high: ask user for approval first; abandon if rejected
 
-- `type="gate_adjust"`: Parse `pattern.action` to get the threshold override (e.g., "relax verify gate to 80% for api features"). Pass the override as context to the subagent when launching that phase.
+4. **Proposal awareness** — check `.sdd/proposals/` for validated proposals. If any exist, note them in run context. Skip silently if none.
 
-- `type="prompt_tuning"`: Inject `pattern.action` text into the subagent context for the targeted phase under:
-  ```
-  ## Pattern-Driven Instructions
-  - [{pattern.pattern_id}]: {pattern.action}
-  ```
-
-**Step 3 -- Abandon stale/mismatched experiments:**
-For each experiment in `active_experiments`, apply the abandonment checks:
-- Context mismatch: experiment `mutation.feature_type` differs from current `feature_type` from triage.
-- Staleness: `status="running"` AND more than 3 runs elapsed since `created_at` without evaluation.
-
-For each experiment that matches either condition:
-```
-mcp__sdd-autopilot__sdd_abandon_experiment(
-  project_path:  "{project_path}",
-  experiment_id: "{experiment.experiment_id}",
-  reason:        "{context_mismatch or stale_experiment description}"
-)
-```
-Log each abandonment:
-```
-sdd_log_event(project_path, feature_id, event_type="experiment_abandoned", phase="adaptive_start", agent_id="orchestrator",
-  data={ experiment_id: "{experiment_id}", reason: "{reason}" })
-```
-
-**Step 4 -- Apply experiment (exploration mode only):**
-This step only executes if `exploration_decision.decision == "explore"` AND a proposed experiment exists in `active_experiments`.
-
-1. Read the experiment `risk_level`:
-
-   a. **If `risk_level="low"` or `risk_level="medium"`:**
-   - Apply `experiment.mutation` to the pipeline (e.g., if mutation says { "skip_phase": "plan" }, remove plan from the sequence; if mutation says { "model_override": { "implement": "opus" } }, swap the model).
-   - Update experiment status to `"running"` by writing back to `experiments.json`.
-   - Store `experiment_applied = experiment.experiment_id` for use at run close.
-
-   b. **If `risk_level="high"`:**
-   - Surface to the user: "High-risk experiment proposed: {experiment.hypothesis}. Approve? (y/n)"
-   - If approved: apply mutation as in (a), mark `"running"`.
-   - If rejected:
-     ```
-     mcp__sdd-autopilot__sdd_abandon_experiment(
-       project_path:  "{project_path}",
-       experiment_id: "{experiment.experiment_id}",
-       reason:        "user_rejected"
-     )
-     ```
-   - Store `experiment_applied` accordingly (the experiment_id if approved, `null` if rejected).
-
-**Step 5 -- Proposal awareness (informational):**
-Read `.sdd/proposals/` directory. For each `.json` file, check if `status` is `"validated"` or `"prompt_generated"`.
-
-If pending proposals exist, store them in a `pending_proposals` list and include an awareness note in the run context:
-```
-## Pending Tool Proposals
-The following tools have been proposed and validated but not yet implemented:
-{for each: "- {name}: {description} (proposed {proposed_at})"}
-Consider whether any of these would help with the current feature.
-```
-
-If the directory does not exist or contains no validated proposals, skip this step silently.
-
-**Step 6 -- Log adaptive decisions:**
-```
-mcp__sdd-autopilot__sdd_log_event(
-  project_path: "{project_path}",
-  feature_id:   "{feature_id}",
-  event_type:   "adaptive_routing",
-  phase:        "pre_pipeline",
-  agent_id:     "orchestrator",
-  data: {
-    mode:               "{exploration_decision.decision}",
-    exploit_score:      {exploration_decision.exploit_score},
-    explore_score:      {exploration_decision.explore_score},
-    method:             "thompson_sampling",
-    patterns_applied:   ["{pattern_id_1}", "{pattern_id_2}", ...],
-    phases_skipped:     ["{phase_1}", ...],
-    model_overrides:    { "{phase}": "{model}", ... },
-    experiment_applied: "{experiment_id}" | null,
-    pending_proposals:  ["{proposal_name_1}", ...]
-  }
-)
-```
+5. **Log** — `sdd_log_event` with `event_type="adaptive_routing"`, `phase="pre_pipeline"`, including mode, scores, patterns applied, phases skipped, model overrides, experiment applied, pending proposals.
 
 Continue to the specify phase (or the first non-skipped phase).
 
