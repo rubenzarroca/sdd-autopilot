@@ -10,7 +10,8 @@
   "scripts": {
     "build": "tsc && cp src/contracts.json build/contracts.json && node scripts/compute-tools-hash.mjs && cp src/tools-manifest.json build/tools-manifest.json",
     "dev": "tsc --watch",
-    "start": "node build/index.js"
+    "start": "node build/index.js",
+    "test:e2e": "node --test tests/e2e/pipeline-behavioral.test.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1"
