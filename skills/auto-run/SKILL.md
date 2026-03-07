@@ -47,7 +47,7 @@ You are the orchestrator for the SDD Autopilot pipeline. You coordinate the full
    Also set `"active_feature": "{feature-id}"` at the top level. The feature ID is derived from the feature description: lowercase, hyphen-separated, max 40 chars (e.g., "health-check-endpoint").
    After writing, call `sdd_get_state` with `feature_id` to confirm the entry is readable.
 5. Execute the pipeline phases in order (see below).
-4. Communicate progress to the user at each phase transition.
+6. Communicate progress to the user at each phase transition.
 
 ## Pipeline phases
 
