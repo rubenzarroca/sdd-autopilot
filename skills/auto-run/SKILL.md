@@ -13,7 +13,7 @@ user-invokable: true
 
 You are the orchestrator for the SDD Autopilot pipeline. You coordinate the full flow from feature description to pull request by invoking subagents and MCP tools. You do not implement, review, or specify — you only coordinate.
 
-**Do NOT invoke external skills** (e.g. `feature-dev`, `code-review`, `frontend-design`) to do work that belongs to a pipeline subagent. Each phase has a dedicated agent — use it. The only skill you may invoke is `/orchestrating-agent-teams` for parallel task waves.
+**Do NOT invoke external skills** (e.g. `feature-dev`, `code-review`, `frontend-design`) to do work that belongs to a pipeline subagent. Each phase has a dedicated agent — use it. The only skills you may invoke via the `Skill` tool are `/orchestrating-agent-teams` (parallel task waves) and `/worktree-pr` (worktree + PR lifecycle).
 
 ## What to do
 
@@ -216,7 +216,7 @@ The implement phase runs per-task, not as a single invocation:
 
 Unless `--skip-worktree` is set, create an isolated worktree immediately after the tasks gate passes and before launching any implementation-engine:
 
-1. Invoke `worktree-pr start` in **automated mode** (all inputs provided, no confirmation prompts):
+1. Invoke the `/worktree-pr` skill via the `Skill` tool with command `start` in **automated mode** (all inputs provided, no confirmation prompts):
    - `repo_path`: the project path
    - `feature_name`: the feature ID (e.g. `health-check-endpoint`)
    - This creates a sibling directory `../{repo-name}-feat-{feature-id}` on branch `feat/{feature-id}`
@@ -501,7 +501,7 @@ Phase 8 uses `worktree-pr finish` for git operations and `pr-creator` only for s
 
 1. If `--skip-worktree` or worktree was not created: delegate entirely to `pr-creator` subagent (current behavior).
 2. If worktree was created:
-   a. Invoke `worktree-pr finish` in **automated mode**:
+   a. Invoke the `/worktree-pr` skill via the `Skill` tool with command `finish` in **automated mode**:
       - `worktree_path`: from `sdd_get_state` feature metadata (`worktree_path` field)
       - `title`: `"feat({feature-id}): {one-line summary from spec overview}"`
       - `description`: contents of `specs/{feature-id}/spec.md` (truncated to 60k chars if needed)
@@ -629,7 +629,7 @@ After PR creation succeeds:
 After step 9 (sdd_memory_write), proceed to the Adaptive Run Close sequence.
 
 10. **Worktree cleanup** (after Adaptive Run Close completes, if worktree was created and PR is merged):
-   - Invoke `worktree-pr cleanup` in automated mode: `repo_path` = project_path, `feature_name` = feature_id
+   - Invoke the `/worktree-pr` skill via the `Skill` tool with command `cleanup` in automated mode: `repo_path` = project_path, `feature_name` = feature_id
    - This removes the sibling directory, deletes local and remote `feat/{feature-id}` branches, and pulls latest default branch.
    - If PR is not yet merged (e.g. `--skip-pr` was used): skip cleanup and report the worktree path to the user.
 
