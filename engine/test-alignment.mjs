@@ -13,12 +13,14 @@ import { TOOLS, HANDLER_MAP } from "./build/index.js";
 import * as handlers from "./build/handlers.js";
 import * as observability from "./build/observability.js";
 import * as metacognition from "./build/metacognition.js";
+import * as toolFactory from "./build/tool-factory.js";
 
-// Collect all exported functions from the three source modules
+// Collect all exported functions from the source modules
 const allExports = {
   ...handlers,
   ...observability,
   ...metacognition,
+  ...toolFactory,
 };
 
 describe("Tool alignment", () => {

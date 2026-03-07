@@ -59,6 +59,12 @@ import {
   handleSetGolden,
 } from "./metacognition.js";
 
+import {
+  handleProposeTool,
+  handleReviewToolProposal,
+  handleGenerateToolPrompt,
+} from "./tool-factory.js";
+
 // ─── Tool definitions (JSON Schema) ─────────────────────────────
 
 export const TOOLS = [
@@ -1452,6 +1458,86 @@ export const TOOLS = [
       description: "Confirmation with the recorded breadcrumb",
     },
   },
+
+  // ─── Tool Factory (Self-Evolution) ────────────────────────────────
+  {
+    name: "sdd_propose_tool",
+    description:
+      "Propose a new tool when the orchestrator detects a capability gap during pipeline execution",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        project_path:           { type: "string", description: "Absolute path to the project root" },
+        name:                   { type: "string", description: "Tool name (must match /^sdd_[a-z_]+$/)" },
+        description:            { type: "string", description: "What the tool does" },
+        rationale:              { type: "string", description: "Why this tool is needed" },
+        proposed_input_schema:  { type: "object", description: "JSON Schema for the tool input" },
+        proposed_output_schema: { type: "object", description: "JSON Schema for the tool output" },
+        proposed_handler_logic: { type: "string", description: "Pseudocode or description of handler logic" },
+        target_file:            { type: "string", description: "File where the handler should be implemented" },
+        pipeline_phase:         { type: "string", description: "Pipeline phase where this tool is used" },
+        trigger_context:        { type: "string", description: "What triggered the need for this tool" },
+      },
+      required: ["project_path", "name", "description", "rationale", "proposed_input_schema", "proposed_output_schema", "proposed_handler_logic", "target_file", "pipeline_phase", "trigger_context"],
+    },
+    outputSchema: {
+      type: "object" as const,
+      description: "Proposal creation result",
+      properties: {
+        success:       { type: "boolean", description: "Whether the proposal was created" },
+        proposal_path: { type: "string", description: "Path to the proposal JSON file" },
+        status:        { type: "string", description: "Proposal status (proposed)" },
+        error:         { type: "string", description: "Error message if creation failed" },
+      },
+    },
+  },
+  {
+    name: "sdd_review_tool_proposal",
+    description:
+      "Review a tool proposal against existing tools to detect overlap and validate uniqueness",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        project_path:        { type: "string", description: "Absolute path to the project root" },
+        proposal_name:       { type: "string", description: "Name of the proposal to review (without sdd_ prefix or file extension)" },
+        reviewer_assessment: { type: "string", description: "Optional reviewer notes" },
+      },
+      required: ["project_path", "proposal_name"],
+    },
+    outputSchema: {
+      type: "object" as const,
+      description: "Review result with overlap analysis",
+      properties: {
+        status:           { type: "string", description: "validated or rejected" },
+        reason:           { type: "string", description: "Rejection reason if rejected" },
+        overlapping_tools: { type: "array", items: { type: "string" }, description: "Tools that overlap" },
+        overlap_scores:   { type: "array", description: "Overlap scores per tool", items: { type: "object", additionalProperties: true } },
+        error:            { type: "string", description: "Error message if review failed" },
+      },
+    },
+  },
+  {
+    name: "sdd_generate_tool_prompt",
+    description:
+      "Generate a ready-to-use Claude Code prompt from a validated tool proposal",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        project_path:  { type: "string", description: "Absolute path to the project root" },
+        proposal_name: { type: "string", description: "Name of the validated proposal" },
+      },
+      required: ["project_path", "proposal_name"],
+    },
+    outputSchema: {
+      type: "object" as const,
+      description: "Prompt generation result",
+      properties: {
+        success:     { type: "boolean", description: "Whether the prompt was generated" },
+        prompt_path: { type: "string", description: "Path to the generated prompt markdown file" },
+        error:       { type: "string", description: "Error message if generation failed" },
+      },
+    },
+  },
 ];
 
 // ─── Tool dispatcher ─────────────────────────────────────────────
@@ -1500,6 +1586,10 @@ export const HANDLER_MAP: Record<string, HandlerFn> = {
   sdd_run_retro:            handleRunRetro,
   sdd_phase_confidence:     handlePhaseConfidence,
   sdd_set_golden:           handleSetGolden,
+  // Tool Factory (Self-Evolution)
+  sdd_propose_tool:          handleProposeTool,
+  sdd_review_tool_proposal:  handleReviewToolProposal,
+  sdd_generate_tool_prompt:  handleGenerateToolPrompt,
 };
 
 // ─── Server setup ────────────────────────────────────────────────

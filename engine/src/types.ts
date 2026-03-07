@@ -812,3 +812,38 @@ export interface PhaseConfidenceOutput {
   updated_at: string;
   error?: string;
 }
+
+// ─── Tool Factory (Self-Evolution) ───────────────────────────────
+
+export interface ToolProposal {
+  name: string;
+  description: string;
+  rationale: string;
+  proposed_input_schema: Record<string, unknown>;
+  proposed_output_schema: Record<string, unknown>;
+  proposed_handler_logic: string;
+  target_file: string;
+  pipeline_phase: string;
+  trigger_context: string;
+  proposed_at: string;
+  proposed_by: string;
+  status: "proposed" | "validated" | "rejected" | "prompt_generated";
+  run_id: string;
+  feature_id: string;
+  reviewed_at?: string;
+  overlap_details?: Array<{ tool: string; score: number }>;
+  rejection_reason?: string;
+  reviewer_assessment?: string;
+}
+
+export interface ToolReviewResult {
+  status: "validated" | "rejected";
+  reason?: string;
+  overlapping_tools?: string[];
+  overlap_scores?: Array<{ tool: string; score: number }>;
+}
+
+export interface ToolPromptResult {
+  success: boolean;
+  prompt_path: string;
+}
