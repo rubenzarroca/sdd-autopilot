@@ -418,7 +418,7 @@ After PR creation succeeds:
        sdd_append_signal(project_path, feature_id, signal={
          type: "ATTENTION_REQUIRED",
          source: "orchestrator",
-         message: "Critical threshold alert: {alert.message}",
+         content: "Critical threshold alert: {alert.message}",
          data: { alerts: critical_alerts }
        })
        ```
