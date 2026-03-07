@@ -103,7 +103,7 @@
       },
       "gate": {
         "type": "mechanical",
-        "checks": ["all tasks in state=completed", "no syntax errors in modified files"]
+        "checks": ["all tasks in state=completed", "no syntax errors in modified files", "tool alignment test passes"]
       },
       "execution": "per_task",
       "wave_config": {

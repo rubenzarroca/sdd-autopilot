@@ -31,6 +31,12 @@ import {
   handleEmitMetrics,
   handleGetRunSummary,
   handleGetAnalytics,
+  handleCheckThresholds,
+  handleEstimateCost,
+  handleGetLiveStatus,
+  handleCompareRuns,
+  handleDetectAnomaly,
+  handleValidateMetrics,
 } from "./observability.js";
 
 import {
@@ -42,11 +48,17 @@ import {
   handleProposeExperiment,
   handleEvaluateExperiment,
   handleProposeEvolution,
+  handleApproveEvolution,
+  handleAbandonExperiment,
+  handleUpdatePattern,
+  handleGetStrategy,
+  handleRunRetro,
+  handlePhaseConfidence,
 } from "./metacognition.js";
 
 // ─── Tool definitions (JSON Schema) ─────────────────────────────
 
-const TOOLS = [
+export const TOOLS = [
   {
     name: "sdd_get_state",
     description:
@@ -454,6 +466,108 @@ const TOOLS = [
     },
   },
 
+  {
+    name: "sdd_approve_evolution",
+    description:
+      "Approve or reject a proposed PipelineEvolution. " +
+      "If approved and type=weight_adjust with low impact: auto-applies to score_weights.json. " +
+      "Structural changes (phase_add, phase_remove, agent_redesign, contract_change) go to approved_pending for manual application. " +
+      "Rejected evolutions are marked as rejected with reason.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        project_path:  { type: "string", description: "Absolute path to the project root" },
+        evolution_id:  { type: "string", description: "Evolution identifier" },
+        decision:      { type: "string", enum: ["approve", "reject"], description: "Approve or reject" },
+        reason:        { type: "string", description: "Optional reason for the decision" },
+      },
+      required: ["project_path", "evolution_id", "decision"],
+    },
+  },
+  {
+    name: "sdd_abandon_experiment",
+    description:
+      "Cancel an experiment in status proposed or running without evaluating it. " +
+      "Marks it as abandoned with a reason. Frees the experiment slot for a new proposal.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        project_path:   { type: "string", description: "Absolute path to the project root" },
+        experiment_id:  { type: "string", description: "Experiment identifier" },
+        reason:         { type: "string", description: "Why the experiment is being abandoned" },
+      },
+      required: ["project_path", "experiment_id", "reason"],
+    },
+  },
+  {
+    name: "sdd_update_pattern",
+    description:
+      "Increment supporting_runs and optionally update confidence of an ExploitationPattern. " +
+      "Use after a run confirms a candidate pattern. Cannot update decayed patterns.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        project_path: { type: "string", description: "Absolute path to the project root" },
+        pattern_id:   { type: "string", description: "Pattern identifier" },
+        increment:    { type: "number", description: "How much to increment supporting_runs (default: 1)" },
+        confidence:   { type: "number", description: "Optional: new confidence value (0.0-1.0)" },
+      },
+      required: ["project_path", "pattern_id"],
+    },
+  },
+  {
+    name: "sdd_get_strategy",
+    description:
+      "Read active patterns, running experiments, and current score weights for a feature context. " +
+      "Returns a strategy object with applicable_patterns, active_experiments, current_weights, and recommendations. " +
+      "Call at pipeline start so the orchestrator can decide which phases to skip or modify.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        project_path: { type: "string", description: "Absolute path to the project root" },
+        feature_type: { type: "string", description: "Feature type (e.g. 'api', 'ui', 'refactor')" },
+        complexity:   { type: "string", description: "Feature complexity: low, medium, high, critical" },
+      },
+      required: ["project_path", "feature_type", "complexity"],
+    },
+  },
+  {
+    name: "sdd_run_retro",
+    description:
+      "Generate a structured retro report for a completed feature run. " +
+      "Compares expected vs actual outcome, identifies bottleneck phases, " +
+      "checks which active patterns were confirmed or contradicted, and produces actionable suggestions. " +
+      "Persists retro.json in .sdd/runs/{feature_id}/.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        project_path:     { type: "string", description: "Absolute path to the project root" },
+        feature_id:       { type: "string", description: "Feature identifier" },
+        expected_outcome: { type: "string", description: "Optional: what was expected ('clean_pass', 'minor_fixes', etc.)" },
+      },
+      required: ["project_path", "feature_id"],
+    },
+  },
+  {
+    name: "sdd_phase_confidence",
+    description:
+      "Assign a confidence score (0.0-1.0) to the output of a specific pipeline phase. " +
+      "Persists to .sdd/runs/{feature_id}/phase_confidence.json. " +
+      "Upserts: calling again for the same feature+phase replaces the previous entry.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        project_path: { type: "string", description: "Absolute path to the project root" },
+        feature_id:   { type: "string", description: "Feature identifier" },
+        phase:        { type: "string", description: "Phase name (e.g. 'specify', 'plan', 'verify')" },
+        confidence:   { type: "number", description: "Confidence score between 0.0 and 1.0" },
+        reasoning:    { type: "string", description: "Why this confidence level" },
+        factors:      { type: "object", description: "Optional: influencing factors (e.g. {spec_clarity: 0.8, test_coverage: 0.6})", additionalProperties: { type: "number" } },
+      },
+      required: ["project_path", "feature_id", "phase", "confidence", "reasoning"],
+    },
+  },
+
   // ─── Observability Layer (Phase 1) ────────────────────────────────
   {
     name: "sdd_emit_metrics",
@@ -537,13 +651,135 @@ const TOOLS = [
       required: ["project_path"],
     },
   },
+  {
+    name: "sdd_check_thresholds",
+    description:
+      "Detect when metrics cross thresholds and emit warnings/criticals. " +
+      "Checks per-phase fix_loops and duration ratio vs historical average, " +
+      "plus run-level first_pass_rate and total_duration. " +
+      "Critical if value is 2x the threshold, warning if just crossed. " +
+      "Uses >= 3 historical runs for ratio checks; absolute thresholds always apply.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        project_path: { type: "string", description: "Absolute path to the project root" },
+        feature_id:   { type: "string", description: "Feature identifier" },
+        thresholds: {
+          type: "object",
+          description: "Optional: override default thresholds",
+          properties: {
+            max_fix_loops_per_phase:    { type: "number", description: "Default: 3" },
+            max_duration_ratio:         { type: "number", description: "Ratio vs historical avg. Default: 2.0" },
+            min_first_pass_rate:        { type: "number", description: "Minimum %. Default: 50" },
+            max_total_duration_minutes: { type: "number", description: "Default: 60" },
+          },
+        },
+      },
+      required: ["project_path", "feature_id"],
+    },
+  },
+  {
+    name: "sdd_estimate_cost",
+    description:
+      "Estimate cost in USD from tokens consumed in a pipeline run. " +
+      "Reads metrics.jsonl for the feature (or last run from history if no feature_id). " +
+      "Applies model-specific pricing (opus/sonnet/haiku). " +
+      "Returns total_cost_usd, per-phase breakdown, and model breakdown.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        project_path: { type: "string", description: "Absolute path to the project root" },
+        feature_id:   { type: "string", description: "Optional: feature to estimate cost for. Default: last run from history" },
+        pricing: {
+          type: "object",
+          description: "Optional: override default pricing ($ per 1M tokens)",
+          additionalProperties: {
+            type: "object",
+            properties: {
+              input:  { type: "number" },
+              output: { type: "number" },
+            },
+          },
+        },
+      },
+      required: ["project_path"],
+    },
+  },
+  {
+    name: "sdd_get_live_status",
+    description:
+      "Query what phase is currently executing for a feature. " +
+      "Reads run.log for phase_start/phase_end events and metrics.jsonl for completed phases. " +
+      "Returns status (running/idle), current_phase, elapsed_seconds, and last_completed_phase.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        project_path: { type: "string", description: "Absolute path to the project root" },
+        feature_id:   { type: "string", description: "Feature identifier" },
+      },
+      required: ["project_path", "feature_id"],
+    },
+  },
+  {
+    name: "sdd_compare_runs",
+    description:
+      "Compare two pipeline runs side by side. " +
+      "Diffs duration, fix_loops, first_pass_rate, pipeline_score, and total_tokens. " +
+      "Also diffs per-phase duration and fix_loops for phases present in both runs. " +
+      "Determines the better run by pipeline_score.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        project_path: { type: "string", description: "Absolute path to the project root" },
+        run_id_a:     { type: "string", description: "First run ID (or feature_id)" },
+        run_id_b:     { type: "string", description: "Second run ID (or feature_id)" },
+      },
+      required: ["project_path", "run_id_a", "run_id_b"],
+    },
+  },
+  {
+    name: "sdd_detect_anomaly",
+    description:
+      "Detect if a run is anomalous compared to the historical distribution. " +
+      "Computes z-scores for total_duration, total_fix_loops, first_pass_rate, and pipeline_score. " +
+      "Marks as anomaly if |z-score| > sensitivity (default 2.0). " +
+      "Requires >= 5 historical runs for statistical analysis.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        project_path: { type: "string", description: "Absolute path to the project root" },
+        feature_id:   { type: "string", description: "Feature identifier to check" },
+        sensitivity:  { type: "number", description: "Number of standard deviations for anomaly detection (default: 2.0)" },
+      },
+      required: ["project_path", "feature_id"],
+    },
+  },
+  {
+    name: "sdd_validate_metrics",
+    description:
+      "Validate a PhaseMetrics object before persisting with sdd_emit_metrics. " +
+      "Checks required fields (run_id, feature_id, phase, agent, model, timestamps, duration, gate_result, gate_attempts, findings_count, fix_loop_count), " +
+      "validates types, ISO timestamps, non-negative numbers, gate_result enum, and warns about unknown fields.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        project_path: { type: "string", description: "Absolute path to the project root" },
+        metrics: {
+          type: "object",
+          description: "The PhaseMetrics object to validate",
+          additionalProperties: true,
+        },
+      },
+      required: ["project_path", "metrics"],
+    },
+  },
 ];
 
 // ─── Tool dispatcher ─────────────────────────────────────────────
 
 type HandlerFn = (params: any) => Promise<unknown>;
 
-const HANDLER_MAP: Record<string, HandlerFn> = {
+export const HANDLER_MAP: Record<string, HandlerFn> = {
   sdd_get_state: handleGetState,
   sdd_transition: handleTransition,
   sdd_get_contract: handleGetContract,
@@ -560,7 +796,13 @@ const HANDLER_MAP: Record<string, HandlerFn> = {
   // Observability Layer (Phase 1)
   sdd_emit_metrics:    handleEmitMetrics,
   sdd_get_run_summary: handleGetRunSummary,
-  sdd_get_analytics:   handleGetAnalytics,
+  sdd_get_analytics:       handleGetAnalytics,
+  sdd_check_thresholds:    handleCheckThresholds,
+  sdd_estimate_cost:       handleEstimateCost,
+  sdd_get_live_status:     handleGetLiveStatus,
+  sdd_compare_runs:        handleCompareRuns,
+  sdd_detect_anomaly:      handleDetectAnomaly,
+  sdd_validate_metrics:    handleValidateMetrics,
   // Metacognition Layer (Phase 2+)
   sdd_compute_score:        handleComputeScore,
   sdd_get_patterns:         handleGetPatterns,
@@ -570,6 +812,12 @@ const HANDLER_MAP: Record<string, HandlerFn> = {
   sdd_propose_experiment:   handleProposeExperiment,
   sdd_evaluate_experiment:  handleEvaluateExperiment,
   sdd_propose_evolution:    handleProposeEvolution,
+  sdd_approve_evolution:    handleApproveEvolution,
+  sdd_abandon_experiment:   handleAbandonExperiment,
+  sdd_update_pattern:       handleUpdatePattern,
+  sdd_get_strategy:         handleGetStrategy,
+  sdd_run_retro:            handleRunRetro,
+  sdd_phase_confidence:     handlePhaseConfidence,
 };
 
 // ─── Server setup ────────────────────────────────────────────────
@@ -614,7 +862,9 @@ async function main() {
   await server.connect(transport);
 }
 
-main().catch((err) => {
-  console.error("Fatal:", err);
-  process.exit(1);
-});
+if (!process.env.SDD_SKIP_MAIN) {
+  main().catch((err) => {
+    console.error("Fatal:", err);
+    process.exit(1);
+  });
+}

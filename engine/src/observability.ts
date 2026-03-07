@@ -6,6 +6,7 @@ import { readFile, writeFile, mkdir, appendFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import type { PhaseMetrics, RunSummary, AnalyticsResult, AnalyticsTrend } from "./types.js";
 import { fileExists, parseJsonl } from "./utils.js";
+import { StateManager } from "./state.js";
 
 // ─── sdd_emit_metrics ────────────────────────────────────────────
 
@@ -236,4 +237,545 @@ export async function handleGetAnalytics(params: {
     trends,
   };
   return result;
+}
+
+// ─── sdd_check_thresholds ─────────────────────────────────────────
+
+interface ThresholdAlert {
+  level: "warning" | "critical";
+  metric: string;
+  phase?: string;
+  current_value: number;
+  threshold: number;
+  message: string;
+}
+
+const DEFAULT_THRESHOLDS = {
+  max_fix_loops_per_phase: 3,
+  max_duration_ratio: 2.0,
+  min_first_pass_rate: 50,
+  max_total_duration_minutes: 60,
+};
+
+export async function handleCheckThresholds(params: {
+  project_path: string;
+  feature_id:   string;
+  thresholds?:  Partial<typeof DEFAULT_THRESHOLDS>;
+}): Promise<unknown> {
+  const t = { ...DEFAULT_THRESHOLDS, ...params.thresholds };
+  const alerts: ThresholdAlert[] = [];
+
+  const metricsPath = resolve(params.project_path, ".sdd", "runs", params.feature_id, "metrics.jsonl");
+  if (!await fileExists(metricsPath)) {
+    return { error: `No metrics found for feature "${params.feature_id}"` };
+  }
+
+  const raw = await readFile(metricsPath, "utf-8");
+  const metrics = parseJsonl<PhaseMetrics>(raw);
+
+  if (metrics.length === 0) {
+    return { alerts: [], checked_at: new Date().toISOString() };
+  }
+
+  // Load historical averages (only if >= 3 runs exist)
+  const historyPath = resolve(params.project_path, ".sdd", "analytics", "history.jsonl");
+  let historicalDurByPhase: Record<string, number> | null = null;
+  if (await fileExists(historyPath)) {
+    const histRaw = await readFile(historyPath, "utf-8");
+    const summaries = parseJsonl<RunSummary>(histRaw);
+    if (summaries.length >= 3) {
+      historicalDurByPhase = {};
+      const durByPhase: Record<string, number[]> = {};
+      for (const s of summaries) {
+        for (const m of s.phase_metrics) {
+          (durByPhase[m.phase] ??= []).push(m.duration_ms);
+        }
+      }
+      for (const [phase, ds] of Object.entries(durByPhase)) {
+        historicalDurByPhase[phase] = ds.reduce((a, b) => a + b, 0) / ds.length;
+      }
+    }
+  }
+
+  // Per-phase checks
+  for (const m of metrics) {
+    // Fix loops threshold
+    if (m.fix_loop_count > t.max_fix_loops_per_phase) {
+      const level = m.fix_loop_count > t.max_fix_loops_per_phase * 2 ? "critical" : "warning";
+      alerts.push({
+        level,
+        metric: "fix_loop_count",
+        phase: m.phase,
+        current_value: m.fix_loop_count,
+        threshold: t.max_fix_loops_per_phase,
+        message: `Phase "${m.phase}" has ${m.fix_loop_count} fix loops (threshold: ${t.max_fix_loops_per_phase})`,
+      });
+    }
+
+    // Duration ratio vs historical
+    if (historicalDurByPhase && historicalDurByPhase[m.phase]) {
+      const avgDur = historicalDurByPhase[m.phase];
+      const ratio = m.duration_ms / avgDur;
+      if (ratio > t.max_duration_ratio) {
+        const level = ratio > t.max_duration_ratio * 2 ? "critical" : "warning";
+        alerts.push({
+          level,
+          metric: "duration_ratio",
+          phase: m.phase,
+          current_value: Math.round(ratio * 100) / 100,
+          threshold: t.max_duration_ratio,
+          message: `Phase "${m.phase}" duration is ${ratio.toFixed(1)}x the historical average (threshold: ${t.max_duration_ratio}x)`,
+        });
+      }
+    }
+  }
+
+  // Run-level checks
+  const passed = metrics.filter(m => m.gate_result === "pass");
+  const firstPassRate = passed.length > 0
+    ? Math.round(passed.filter(m => m.gate_attempts === 1).length / passed.length * 100)
+    : 0;
+  if (firstPassRate < t.min_first_pass_rate) {
+    const level = firstPassRate < t.min_first_pass_rate / 2 ? "critical" : "warning";
+    alerts.push({
+      level,
+      metric: "first_pass_rate",
+      current_value: firstPassRate,
+      threshold: t.min_first_pass_rate,
+      message: `First-pass rate is ${firstPassRate}% (threshold: ${t.min_first_pass_rate}%)`,
+    });
+  }
+
+  const totalDurationMin = metrics.reduce((s, m) => s + m.duration_ms, 0) / 60_000;
+  if (totalDurationMin > t.max_total_duration_minutes) {
+    const level = totalDurationMin > t.max_total_duration_minutes * 2 ? "critical" : "warning";
+    alerts.push({
+      level,
+      metric: "total_duration_minutes",
+      current_value: Math.round(totalDurationMin * 10) / 10,
+      threshold: t.max_total_duration_minutes,
+      message: `Total duration is ${totalDurationMin.toFixed(1)} min (threshold: ${t.max_total_duration_minutes} min)`,
+    });
+  }
+
+  return { alerts, checked_at: new Date().toISOString() };
+}
+
+// ─── sdd_estimate_cost ────────────────────────────────────────────
+
+const DEFAULT_PRICING: Record<string, { input: number; output: number }> = {
+  opus:   { input: 15.0, output: 75.0 },
+  sonnet: { input: 3.0, output: 15.0 },
+  haiku:  { input: 0.25, output: 1.25 },
+};
+
+export async function handleEstimateCost(params: {
+  project_path: string;
+  feature_id?:  string;
+  pricing?:     Record<string, { input: number; output: number }>;
+}): Promise<unknown> {
+  const pricing = { ...DEFAULT_PRICING, ...params.pricing };
+
+  // Find metrics to analyze
+  let metrics: PhaseMetrics[];
+
+  if (params.feature_id) {
+    const metricsPath = resolve(params.project_path, ".sdd", "runs", params.feature_id, "metrics.jsonl");
+    if (!await fileExists(metricsPath)) {
+      return { error: `No metrics found for feature "${params.feature_id}"` };
+    }
+    metrics = parseJsonl<PhaseMetrics>(await readFile(metricsPath, "utf-8"));
+  } else {
+    // Find last run from history
+    const historyPath = resolve(params.project_path, ".sdd", "analytics", "history.jsonl");
+    if (!await fileExists(historyPath)) {
+      return { error: "No analytics history found. Run sdd_get_run_summary first." };
+    }
+    const summaries = parseJsonl<RunSummary>(await readFile(historyPath, "utf-8"));
+    if (summaries.length === 0) {
+      return { error: "No runs in history" };
+    }
+    const last = summaries[summaries.length - 1];
+    metrics = last.phase_metrics;
+  }
+
+  const phases: Array<{ phase: string; model: string; tokens_in: number | null; tokens_out: number | null; cost_usd: number }> = [];
+  const modelBreakdown: Record<string, number> = {};
+  let totalCost = 0;
+
+  for (const m of metrics) {
+    const model = m.model || "sonnet";
+    const modelKey = model.includes("opus") ? "opus" : model.includes("haiku") ? "haiku" : "sonnet";
+    const rates = pricing[modelKey] ?? pricing.sonnet;
+
+    let cost = 0;
+    if (m.tokens_in !== null && m.tokens_out !== null) {
+      cost = (m.tokens_in / 1_000_000) * rates.input + (m.tokens_out / 1_000_000) * rates.output;
+    }
+
+    phases.push({
+      phase: m.phase,
+      model: modelKey,
+      tokens_in: m.tokens_in,
+      tokens_out: m.tokens_out,
+      cost_usd: Math.round(cost * 10000) / 10000,
+    });
+
+    modelBreakdown[modelKey] = (modelBreakdown[modelKey] ?? 0) + cost;
+    totalCost += cost;
+  }
+
+  // Round model breakdown
+  for (const k of Object.keys(modelBreakdown)) {
+    modelBreakdown[k] = Math.round(modelBreakdown[k] * 10000) / 10000;
+  }
+
+  return {
+    total_cost_usd: Math.round(totalCost * 10000) / 10000,
+    phases,
+    model_breakdown: modelBreakdown,
+  };
+}
+
+// ─── sdd_get_live_status ──────────────────────────────────────────
+
+export async function handleGetLiveStatus(params: {
+  project_path: string;
+  feature_id:   string;
+}): Promise<unknown> {
+  // Check feature state
+  const sm = new StateManager(params.project_path);
+  const feature = await sm.getFeature(params.feature_id);
+  if (!feature) {
+    return { error: `Feature "${params.feature_id}" not found` };
+  }
+
+  // Read metrics to find in-progress phase
+  const metricsPath = resolve(params.project_path, ".sdd", "runs", params.feature_id, "metrics.jsonl");
+  if (!await fileExists(metricsPath)) {
+    return { status: "idle", feature_state: feature.state, last_completed_phase: null, last_completed_at: null };
+  }
+
+  const metrics = parseJsonl<PhaseMetrics>(await readFile(metricsPath, "utf-8"));
+  if (metrics.length === 0) {
+    return { status: "idle", feature_state: feature.state, last_completed_phase: null, last_completed_at: null };
+  }
+
+  // Phases with completed_at are done. Find one that started but has no matching completion.
+  // Since metrics are append-only with one entry per phase completion, we check run.log for in-progress
+  const runLogPath = resolve(params.project_path, ".sdd", "runs", params.feature_id, "run.log");
+  let currentPhase: string | null = null;
+  let startedAt: string | null = null;
+
+  if (await fileExists(runLogPath)) {
+    const logRaw = await readFile(runLogPath, "utf-8");
+    const events = logRaw.trim().split("\n").filter(Boolean).map(l => {
+      try { return JSON.parse(l); } catch { return null; }
+    }).filter(Boolean);
+
+    // Find last phase_start without a matching phase_end
+    const starts = new Map<string, string>();
+    const ends = new Set<string>();
+    for (const evt of events) {
+      if (evt.event_type === "phase_start" && evt.phase) {
+        starts.set(evt.phase, evt.timestamp);
+      }
+      if (evt.event_type === "phase_end" && evt.phase) {
+        ends.add(evt.phase);
+      }
+    }
+    for (const [phase, ts] of starts) {
+      if (!ends.has(phase)) {
+        currentPhase = phase;
+        startedAt = ts;
+      }
+    }
+  }
+
+  // Last completed phase from metrics (sorted by completed_at)
+  const sorted = [...metrics].sort((a, b) => a.completed_at.localeCompare(b.completed_at));
+  const last = sorted[sorted.length - 1];
+
+  if (currentPhase) {
+    const elapsedMs = startedAt ? Date.now() - new Date(startedAt).getTime() : null;
+    return {
+      status: "running",
+      feature_state: feature.state,
+      current_phase: currentPhase,
+      started_at: startedAt,
+      elapsed_seconds: elapsedMs !== null ? Math.round(elapsedMs / 1000) : null,
+      last_completed_phase: last.phase,
+      last_completed_at: last.completed_at,
+    };
+  }
+
+  return {
+    status: "idle",
+    feature_state: feature.state,
+    current_phase: null,
+    last_completed_phase: last.phase,
+    last_completed_at: last.completed_at,
+  };
+}
+
+// ─── sdd_compare_runs ─────────────────────────────────────────────
+
+export async function handleCompareRuns(params: {
+  project_path: string;
+  run_id_a:     string;
+  run_id_b:     string;
+}): Promise<unknown> {
+  const historyPath = resolve(params.project_path, ".sdd", "analytics", "history.jsonl");
+  if (!await fileExists(historyPath)) {
+    return { error: "No analytics history found" };
+  }
+
+  const summaries = parseJsonl<RunSummary>(await readFile(historyPath, "utf-8"));
+
+  const findRun = (id: string) =>
+    summaries.find(s => s.run_id === id) ?? summaries.find(s => s.feature_id === id);
+
+  const runA = findRun(params.run_id_a);
+  const runB = findRun(params.run_id_b);
+
+  if (!runA) return { error: `Run "${params.run_id_a}" not found in history` };
+  if (!runB) return { error: `Run "${params.run_id_b}" not found in history` };
+
+  // Compute diffs for global metrics
+  const diffMetric = (name: string, a: number | null, b: number | null) => {
+    if (a === null || b === null) return { a, b, diff: null, diff_pct: null };
+    const diff = b - a;
+    const diffPct = a !== 0 ? Math.round((diff / a) * 1000) / 10 : null;
+    return { a, b, diff, diff_pct: diffPct };
+  };
+
+  const diffs: Record<string, { a: number | null; b: number | null; diff: number | null; diff_pct: number | null }> = {
+    total_duration_ms: diffMetric("total_duration_ms", runA.total_duration_ms, runB.total_duration_ms),
+    total_fix_loops:   diffMetric("total_fix_loops",   runA.total_fix_loops,   runB.total_fix_loops),
+    first_pass_rate:   diffMetric("first_pass_rate",   runA.first_pass_rate,   runB.first_pass_rate),
+    pipeline_score:    diffMetric("pipeline_score",    runA.pipeline_score,    runB.pipeline_score),
+    total_tokens:      diffMetric("total_tokens",      runA.total_tokens,      runB.total_tokens),
+  };
+
+  // Per-phase diffs
+  const phaseDiffs: Array<{ phase: string; metric: string; a: number; b: number; diff: number }> = [];
+  const phasesA = new Map(runA.phase_metrics.map(m => [m.phase, m]));
+  const phasesB = new Map(runB.phase_metrics.map(m => [m.phase, m]));
+  const allPhases = new Set([...phasesA.keys(), ...phasesB.keys()]);
+
+  for (const phase of allPhases) {
+    const a = phasesA.get(phase);
+    const b = phasesB.get(phase);
+    if (a && b) {
+      if (a.duration_ms !== b.duration_ms) {
+        phaseDiffs.push({ phase, metric: "duration_ms", a: a.duration_ms, b: b.duration_ms, diff: b.duration_ms - a.duration_ms });
+      }
+      if (a.fix_loop_count !== b.fix_loop_count) {
+        phaseDiffs.push({ phase, metric: "fix_loop_count", a: a.fix_loop_count, b: b.fix_loop_count, diff: b.fix_loop_count - a.fix_loop_count });
+      }
+    }
+  }
+
+  // Determine better run
+  const scoreA = runA.pipeline_score ?? 0;
+  const scoreB = runB.pipeline_score ?? 0;
+  const betterRun = scoreA > scoreB ? runA.run_id : scoreB > scoreA ? runB.run_id : "tied";
+
+  return {
+    run_a: { id: runA.run_id, feature_id: runA.feature_id, outcome: runA.outcome, pipeline_score: runA.pipeline_score },
+    run_b: { id: runB.run_id, feature_id: runB.feature_id, outcome: runB.outcome, pipeline_score: runB.pipeline_score },
+    diffs,
+    phase_diffs: phaseDiffs,
+    better_run: betterRun,
+  };
+}
+
+// ─── sdd_detect_anomaly ───────────────────────────────────────────
+
+export async function handleDetectAnomaly(params: {
+  project_path: string;
+  feature_id:   string;
+  sensitivity?: number;
+}): Promise<unknown> {
+  const sensitivity = params.sensitivity ?? 2.0;
+
+  const historyPath = resolve(params.project_path, ".sdd", "analytics", "history.jsonl");
+  if (!await fileExists(historyPath)) {
+    return { is_anomaly: false, status: "insufficient_data", message: "No analytics history found" };
+  }
+
+  const allSummaries = parseJsonl<RunSummary>(await readFile(historyPath, "utf-8"));
+  // Exclude the current feature from the historical baseline
+  const historical = allSummaries.filter(s => s.feature_id !== params.feature_id);
+
+  if (historical.length < 5) {
+    return { is_anomaly: false, status: "insufficient_data", message: `Need >= 5 historical runs, have ${historical.length}` };
+  }
+
+  // Load current run summary
+  const summaryPath = resolve(params.project_path, ".sdd", "runs", params.feature_id, "summary.json");
+  if (!await fileExists(summaryPath)) {
+    return { error: `No summary.json found for feature "${params.feature_id}"` };
+  }
+  const current: RunSummary = JSON.parse(await readFile(summaryPath, "utf-8"));
+
+  // Compute stats for each metric
+  const computeStats = (values: number[]) => {
+    const mean = values.reduce((s, v) => s + v, 0) / values.length;
+    const stddev = Math.sqrt(values.reduce((s, v) => s + (v - mean) ** 2, 0) / values.length);
+    return { mean, stddev };
+  };
+
+  const metricsToCheck: Array<{ name: string; currentVal: number; historicalVals: number[] }> = [
+    { name: "total_duration_ms", currentVal: current.total_duration_ms, historicalVals: historical.map(s => s.total_duration_ms) },
+    { name: "total_fix_loops",   currentVal: current.total_fix_loops,   historicalVals: historical.map(s => s.total_fix_loops) },
+    { name: "first_pass_rate",   currentVal: current.first_pass_rate,   historicalVals: historical.map(s => s.first_pass_rate) },
+  ];
+  if (current.pipeline_score !== null) {
+    const historicalScores = historical.filter(s => s.pipeline_score !== null).map(s => s.pipeline_score!);
+    if (historicalScores.length >= 5) {
+      metricsToCheck.push({ name: "pipeline_score", currentVal: current.pipeline_score, historicalVals: historicalScores });
+    }
+  }
+
+  const anomalies: Array<{ metric: string; value: number; mean: number; stddev: number; z_score: number }> = [];
+
+  for (const { name, currentVal, historicalVals } of metricsToCheck) {
+    const { mean, stddev } = computeStats(historicalVals);
+    if (stddev === 0) continue; // All same value — can't compute z-score
+    const zScore = Math.round(Math.abs(currentVal - mean) / stddev * 100) / 100;
+    if (zScore > sensitivity) {
+      anomalies.push({
+        metric: name,
+        value: currentVal,
+        mean: Math.round(mean * 100) / 100,
+        stddev: Math.round(stddev * 100) / 100,
+        z_score: zScore,
+      });
+    }
+  }
+
+  // Percentile: what fraction of historical runs had a worse pipeline_score
+  let runPercentile: number | null = null;
+  if (current.pipeline_score !== null) {
+    const scores = historical.filter(s => s.pipeline_score !== null).map(s => s.pipeline_score!);
+    if (scores.length > 0) {
+      const belowCount = scores.filter(s => s < current.pipeline_score!).length;
+      runPercentile = Math.round(belowCount / scores.length * 100);
+    }
+  }
+
+  return {
+    is_anomaly: anomalies.length > 0,
+    status: "analyzed",
+    sensitivity,
+    anomalies,
+    run_percentile: runPercentile,
+  };
+}
+
+// ─── sdd_validate_metrics ─────────────────────────────────────────
+
+const REQUIRED_FIELDS: Record<string, string> = {
+  run_id:            "string",
+  feature_id:        "string",
+  phase:             "string",
+  agent:             "string",
+  model:             "string",
+  started_at:        "string",
+  completed_at:      "string",
+  duration_ms:       "number",
+  gate_result:       "string",
+  gate_attempts:     "number",
+  findings_count:    "number",
+  fix_loop_count:    "number",
+};
+
+const OPTIONAL_FIELDS: Record<string, string> = {
+  tokens_in:         "number",
+  tokens_out:        "number",
+  tool_calls_count:  "number",
+  delta_direction:   "string",
+  feature_type:      "string",
+  complexity:        "string",
+};
+
+const GATE_RESULT_VALUES = new Set(["pass", "fail", "skip"]);
+
+export async function handleValidateMetrics(params: {
+  project_path: string;
+  metrics: Record<string, unknown>;
+}): Promise<unknown> {
+  const m = params.metrics;
+  const errors: Array<{ field: string; message: string }> = [];
+  const warnings: Array<{ field: string; message: string }> = [];
+
+  // Check required fields
+  for (const [field, expectedType] of Object.entries(REQUIRED_FIELDS)) {
+    if (!(field in m)) {
+      errors.push({ field, message: `Required field "${field}" is missing` });
+      continue;
+    }
+    const val = m[field];
+    if (val === null || val === undefined) {
+      errors.push({ field, message: `Required field "${field}" is null/undefined` });
+    } else if (typeof val !== expectedType) {
+      errors.push({ field, message: `Expected ${expectedType}, got ${typeof val}` });
+    }
+  }
+
+  // Check optional fields types (only if present and not null)
+  for (const [field, expectedType] of Object.entries(OPTIONAL_FIELDS)) {
+    if (field in m && m[field] !== null && m[field] !== undefined) {
+      if (typeof m[field] !== expectedType) {
+        errors.push({ field, message: `Expected ${expectedType} or null, got ${typeof m[field]}` });
+      }
+    }
+  }
+
+  // Validate gate_result enum
+  if (typeof m.gate_result === "string" && !GATE_RESULT_VALUES.has(m.gate_result)) {
+    errors.push({ field: "gate_result", message: `Invalid value "${m.gate_result}". Expected: pass, fail, skip` });
+  }
+
+  // Validate ISO timestamps
+  for (const tsField of ["started_at", "completed_at"]) {
+    if (typeof m[tsField] === "string") {
+      const d = new Date(m[tsField] as string);
+      if (isNaN(d.getTime())) {
+        errors.push({ field: tsField, message: `Invalid ISO8601 timestamp: "${m[tsField]}"` });
+      }
+    }
+  }
+
+  // Validate non-negative numbers
+  for (const numField of ["duration_ms", "gate_attempts", "findings_count", "fix_loop_count", "tokens_in", "tokens_out", "tool_calls_count"]) {
+    if (numField in m && typeof m[numField] === "number" && (m[numField] as number) < 0) {
+      errors.push({ field: numField, message: `Value must be non-negative, got ${m[numField]}` });
+    }
+  }
+
+  // Check findings_severity is array of strings
+  if ("findings_severity" in m) {
+    if (!Array.isArray(m.findings_severity)) {
+      errors.push({ field: "findings_severity", message: `Expected array, got ${typeof m.findings_severity}` });
+    } else {
+      for (const s of m.findings_severity as unknown[]) {
+        if (typeof s !== "string") {
+          errors.push({ field: "findings_severity", message: `Array element must be string, got ${typeof s}` });
+          break;
+        }
+      }
+    }
+  }
+
+  // Warn about unknown fields
+  const knownFields = new Set([...Object.keys(REQUIRED_FIELDS), ...Object.keys(OPTIONAL_FIELDS), "findings_severity"]);
+  for (const key of Object.keys(m)) {
+    if (!knownFields.has(key)) {
+      warnings.push({ field: key, message: `Unknown field "${key}" — will be persisted but not used` });
+    }
+  }
+
+  return { valid: errors.length === 0, errors, warnings };
 }

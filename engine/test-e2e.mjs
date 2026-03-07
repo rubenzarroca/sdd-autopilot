@@ -393,9 +393,9 @@ h = await handleMemoryWrite({
 });
 
 h = await handleTickDecay({ project_path: projectPath });
-assert("tick_decay returns decayed count", typeof h.decayed === "number");
-assert("tick_decay returns removed count", typeof h.removed === "number");
-assert("tick_decay returns promoted count", typeof h.promoted === "number");
+assert("tick_decay returns patterns_removed count", typeof h.patterns_removed === "number");
+assert("tick_decay returns explorations_expired count", typeof h.explorations_expired === "number");
+assert("tick_decay returns total_removed count", typeof h.total_removed === "number");
 
 // ── Test 11: sdd_append_signal ────────────────────────────────────
 console.log("\n=== Test 11: sdd_append_signal ===");

@@ -4,6 +4,7 @@
 import { readFile, writeFile, mkdir, appendFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
+import { execSync } from "node:child_process";
 import { homedir } from "node:os";
 import { StateManager, AGENT_PERMISSIONS } from "./state.js";
 import { MemoryManager } from "./memory.js";
@@ -220,6 +221,23 @@ export async function handleEvaluateGate(params: {
         }
       } catch {
         checks.push({ name: checkDesc, passed: false, detail: "Could not read state" });
+      }
+      continue;
+    }
+
+    // Mechanical check: tool alignment test
+    if (lc.includes("alignment") && lc.includes("test")) {
+      const engineDir = resolve(__dirname, "..");
+      const testPath = resolve(engineDir, "test-alignment.mjs");
+      try {
+        const output = execSync(
+          `node --test "${testPath}"`,
+          { cwd: engineDir, timeout: 10_000, env: { ...process.env, SDD_SKIP_MAIN: "1" }, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
+        );
+        checks.push({ name: checkDesc, passed: true, detail: "Tool alignment test passed" });
+      } catch (err: any) {
+        const output = (err.stdout ?? "") + (err.stderr ?? "");
+        checks.push({ name: checkDesc, passed: false, detail: `Tool alignment test failed:\n${output.slice(0, 2000)}` });
       }
       continue;
     }
@@ -540,17 +558,13 @@ export async function handleTickDecay(params: {
 }): Promise<unknown> {
   const mm = new MemoryManager(params.project_path);
 
-  const removed = mm.tickPatternTTLs();
+  const removedPatterns = mm.tickPatternTTLs();
   const expiredExplorations = mm.tickExplorationTTLs();
 
-  // Count promoted patterns (those with high TTL remaining = confirmed)
-  // For now, promoted = 0 since promotion is done by the LLM, not mechanically
-  const promoted = 0;
-
   return {
-    decayed: 1,  // 1 tick applied
-    removed: removed + expiredExplorations,
-    promoted,
+    patterns_removed: removedPatterns,
+    explorations_expired: expiredExplorations,
+    total_removed: removedPatterns + expiredExplorations,
   };
 }
 

@@ -479,7 +479,7 @@ export interface PipelineEvolution {
   supporting_data:  Record<string, unknown>;    // metrics/trends that justify the change
   impact:           "low" | "medium" | "high";
   requires_human:   boolean;    // true for phase_add, phase_remove, agent_redesign (always)
-  status:           "proposed" | "approved" | "applied" | "reverted";
+  status:           "proposed" | "approved" | "approved_pending" | "applied" | "reverted" | "rejected";
   proposed_at:      string;
   approved_at?:     string;
   applied_at?:      string;
