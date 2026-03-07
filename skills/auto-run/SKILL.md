@@ -331,13 +331,17 @@ sdd_log_event(project_path, feature_id, event_type="escalation", phase="{phase}"
 
 ### 8. sdd_emit_metrics (after each phase)
 
-Call `mcp__sdd-autopilot__sdd_emit_metrics` immediately after each phase completes (gate passed or failed definitively). Capture timestamps manually since the Agent tool does not expose them natively.
+Call `mcp__sdd-autopilot__sdd_emit_metrics` immediately after each phase completes (gate passed or failed definitively).
 
 **Instrumentation pattern:**
+
+When the Agent tool returns, its completion summary includes token count and tool uses (e.g. `Done (17 tool uses · 23.2k tokens · 2m 7s)`). Parse these values from the Agent result to populate `tokens_total` and `tool_calls_count`.
+
 ```
 started_at  = new Date().toISOString()  // capture before Agent call
 t0          = Date.now()                // capture before Agent call
 // ... invoke subagent via Agent tool ...
+// Parse from Agent result: "{N} tool uses · {N}k tokens · {duration}"
 completed_at = new Date().toISOString() // capture after Agent returns
 duration_ms  = Date.now() - t0
 
@@ -350,9 +354,8 @@ sdd_emit_metrics(project_path, metrics={
   started_at,
   completed_at,
   duration_ms,
-  tokens_in:         null,               // not available from Agent tool
-  tokens_out:        null,               // not available from Agent tool
-  tool_calls_count:  0,                  // not available from Agent tool
+  tokens_total:      N,                  // parsed from Agent result (e.g. 23200 from "23.2k tokens")
+  tool_calls_count:  N,                  // parsed from Agent result (e.g. 17 from "17 tool uses")
   gate_result:       "pass"|"fail"|"skip",
   gate_attempts:     N,                  // 1 if first attempt, 2+ if fix loop
   findings_count:    N,                  // from verify/review structured output; 0 for other phases
@@ -536,16 +539,18 @@ Report to the user at these points:
  SDD PIPELINE REPORT — {feature_id}
 ═══════════════════════════════════════════════════
 
- Phase       │ Duration │ Gate │ Fix loops │ Confidence
-─────────────┼──────────┼──────┼───────────┼───────────
- Triage      │ {dur}    │ pass │ 0         │ —
- Specify     │ {dur}    │ pass │ {N}       │ {conf}
- Plan        │ {dur}    │ pass │ {N}       │ {conf}
- Tasks       │ {dur}    │ pass │ {N}       │ {conf}
- Implement   │ {dur}    │ pass │ {N}       │ {conf}
- Verify      │ {dur}    │ pass │ {N}       │ {conf}
- Review      │ {dur}    │ pass │ {N}       │ {conf}
- PR          │ {dur}    │ pass │ 0         │ —
+ Phase       │ Duration │ Tokens │ Tools │ Gate │ Fix │ Conf
+─────────────┼──────────┼────────┼───────┼──────┼─────┼──────
+ Triage      │ {dur}    │ {tok}  │ {N}   │ pass │ 0   │ —
+ Specify     │ {dur}    │ {tok}  │ {N}   │ pass │ {N} │ {conf}
+ Plan        │ {dur}    │ {tok}  │ {N}   │ pass │ {N} │ {conf}
+ Tasks       │ {dur}    │ {tok}  │ {N}   │ pass │ {N} │ {conf}
+ Implement   │ {dur}    │ {tok}  │ {N}   │ pass │ {N} │ {conf}
+ Verify      │ {dur}    │ {tok}  │ {N}   │ pass │ {N} │ {conf}
+ Review      │ {dur}    │ {tok}  │ {N}   │ pass │ {N} │ {conf}
+ PR          │ {dur}    │ {tok}  │ {N}   │ pass │ 0   │ —
+─────────────┼──────────┼────────┼───────┼──────┼─────┼──────
+ TOTAL       │ {total}  │ {tot}  │ {N}   │      │ {N} │ {avg}
 
  Score: {pipeline_score}/100 | First-pass: {first_pass_rate}%
  Bottleneck: {slowest phase} ({reason})

@@ -367,9 +367,10 @@ export interface PhaseMetrics {
   completed_at:      string;    // ISO8601
   duration_ms:       number;
 
-  // Consumption (null until Agent tool exposes token usage natively)
+  // Consumption (parsed from Agent tool completion summary, e.g. "17 tool uses · 23.2k tokens")
   tokens_in:         number | null;
   tokens_out:        number | null;
+  tokens_total:      number | null;
   tool_calls_count:  number;
 
   // Result
