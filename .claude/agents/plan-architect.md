@@ -93,6 +93,10 @@ After generating both artifacts, perform a self-review:
 - **DEPENDENCY_MISSING**: required capability absent from codebase AND no suitable package exists. Action: document in risks with severity "blocking"; emit DEPENDENCY_WARNING signal; continue planning.
 - **SPEC_GAP**: spec.md lacks information needed to make an architectural decision. Action: do not guess; emit SPEC_GAP signal; transition to `awaiting_input` via orchestrator.
 
+## API reference (local snapshots)
+
+Before choosing APIs, SDKs, or model parameters in the plan, read the relevant snapshots in `docs/api-snapshots/` to verify you are designing against the current API surface. Key files: `models.md`, `thinking.md`, `effort.md`, `tool-use.md`, `mcp.md`, `mcp-ts-sdk.md`. Do NOT assume API behavior from training data — the snapshots are the source of truth.
+
 ## Decision heuristics
 
 - New file vs modify existing: prefer modifying existing unless the concern is clearly separate

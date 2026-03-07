@@ -66,6 +66,10 @@ Not produced:
 - **DEPENDENCY_MISSING**: package in plan.md dependencies does not exist in node_modules. Action: run install command; if install fails, emit ATTENTION_REQUIRED signal.
 - **IMPLEMENTATION_BUG**: validation cannot be satisfied without changing the spec or plan. Action: emit ATTENTION_REQUIRED signal with description; do not modify spec; continue with best approximation.
 
+## API reference (local snapshots)
+
+Before writing code that calls the Anthropic API or the MCP SDK, read the relevant snapshot in `docs/api-snapshots/` to verify method signatures, parameter names, and model strings. Key files: `models.md`, `thinking.md`, `tool-use.md`, `mcp-ts-sdk.md`. If the snapshot contradicts your training data, trust the snapshot.
+
 ## Decision heuristics
 
 - Type error vs logic error: fix type errors first; they cascade

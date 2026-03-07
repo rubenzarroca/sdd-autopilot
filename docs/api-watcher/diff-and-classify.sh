@@ -67,6 +67,9 @@ for new_file in "$NEW_DIR"/*.md; do
       mcp)
         echo "**Recommended action**: Verify MCP engine compatibility with protocol changes." >> "$REPORT"
         ;;
+      mcp-ts-sdk)
+        echo "**Recommended action**: Check for breaking changes in McpServer, tool(), or StdioTransport. Review \`engine/src/index.ts\`, \`engine/src/handlers.ts\`, and \`package.json\`." >> "$REPORT"
+        ;;
       claude-code)
         echo "**Recommended action**: Check for plugin system or agent spawning changes that affect the architecture." >> "$REPORT"
         ;;

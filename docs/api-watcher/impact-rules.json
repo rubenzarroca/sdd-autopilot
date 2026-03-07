@@ -35,6 +35,7 @@
     "rate-limits": [".sdd/metacognition/config.json"],
     "mcp": ["engine/src/index.ts", "engine/src/handlers.ts"],
     "claude-code": [".claude-plugin/plugin.json", "skills/*.md"],
-    "changelog": ["*"]
+    "changelog": ["*"],
+    "mcp-ts-sdk": ["engine/src/index.ts", "engine/src/handlers.ts", "package.json"]
   }
 }
