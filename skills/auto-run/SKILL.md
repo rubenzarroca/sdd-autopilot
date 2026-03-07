@@ -31,7 +31,24 @@ You are the orchestrator for the SDD Autopilot pipeline. You coordinate the full
       - If exists: read complete content. Store as `project_prd` (full text, unmodified).
       - If not exists: set `project_prd` to null. Continue normally.
 
-   Both values persist for the entire run and are injected into subagent briefs as described below. Neither is required — the pipeline works without them.
+   c. **Available MCP servers** — detect external service capabilities by checking which `mcp__*` tools are available in the current session. Build a `available_services` map:
+      - `mcp__supabase__*` → `{ supabase: true }` — can run SQL migrations, manage tables, execute queries
+      - `mcp__vercel__*` → `{ vercel: true }` — can trigger deployments, check status
+      - `mcp__stripe__*` → `{ stripe: true }` — can manage products, prices, webhooks
+      - `mcp__github__*` → `{ github: true }` — can manage issues, PRs, actions
+      - Any other `mcp__*` prefix → add to map with `true`
+      - If no external MCP tools detected: set `available_services` to empty object. Continue normally.
+
+      When `available_services` is non-empty, pass it to subagent briefs (implementation-engine, verification-engine) under:
+      ```
+      ## Available External Services (MCP)
+      The following services are available via MCP tools. Use them directly
+      instead of generating manual instructions for the user.
+      {list each service and its capabilities}
+      ```
+      Example: if Supabase MCP is available, implementation-engine should execute SQL migrations directly via `mcp__supabase__query` instead of writing "run this in Supabase SQL Editor".
+
+   All three values persist for the entire run and are injected into subagent briefs as described below. None are required — the pipeline works without them.
 
    **Authority hierarchy when conflicts arise:**
    ```
@@ -166,7 +183,17 @@ violates any of these is a bug, not a style preference.
 {constraints as bullet list}
 ```
 
-**Agents that receive neither** (verification-engine, adversarial-reviewer, haiku-triage, haiku-validator, opus-meta-reviewer, retro-analyst, pr-creator):
+**Agents that receive available services** (implementation-engine, verification-engine):
+
+If `available_services` is non-empty, append to the Agent tool prompt:
+```
+## Available External Services (MCP)
+The following services are available via MCP tools. Use them directly
+instead of generating manual instructions for the user.
+{list each service with key capabilities, e.g. "- supabase: run SQL migrations, manage tables, execute queries"}
+```
+
+**Agents that receive neither** (adversarial-reviewer, haiku-triage, haiku-validator, opus-meta-reviewer, retro-analyst, pr-creator):
 
 No additional injection. These agents either already read constitution.md directly, only process metrics, or only execute mechanical operations.
 

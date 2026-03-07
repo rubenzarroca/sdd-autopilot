@@ -17,6 +17,10 @@ tools:
   - mcp__sdd-autopilot__sdd_append_signal
   - mcp__sdd-autopilot__sdd_update_task
   - mcp__sdd-autopilot__sdd_transition
+  - mcp__supabase__*
+  - mcp__vercel__*
+  - mcp__stripe__*
+  - mcp__github__*
 ---
 
 ## Objective

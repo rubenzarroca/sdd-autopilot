@@ -13,6 +13,10 @@ tools:
   - mcp__sdd-autopilot__sdd_get_state
   - mcp__sdd-autopilot__sdd_memory_read
   - mcp__sdd-autopilot__sdd_append_signal
+  - mcp__supabase__*
+  - mcp__vercel__*
+  - mcp__stripe__*
+  - mcp__github__*
 ---
 
 ## Objective
