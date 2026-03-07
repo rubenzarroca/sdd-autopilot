@@ -230,11 +230,12 @@ If `--skip-worktree`: skip steps 1–3 and work directly in `project_path`.
 
 1. Read `specs/{feature_id}/tasks.md` to get the task list
 2. Compute execution waves from the task dependency graph (tasks with no dependencies run in wave 1, etc.)
-3. For each wave, for each task in the wave:
+3. For each wave: if the wave has **2+ tasks**, invoke `/orchestrating-agent-teams` to launch them as a parallel team — each teammate runs `implementation-engine` for one task. If the wave has a single task, launch `implementation-engine` directly (no team needed). For each task in the wave:
    a. Extract the task block from tasks.md
    b. Launch `implementation-engine` with that task block + spec + plan + memory, pointing it at `worktree_path` (or `project_path` if `--skip-worktree`)
    c. If pair_review is enabled for this stage: run opus-coach on the result
    d. The implementation-engine marks the task completed via `sdd_update_task` and logs via `sdd_transition(implementing→implementing)`. Verify task status is "completed" in state before moving to next task.
+   Wait for all tasks in the wave to complete before starting the next wave.
 4. After all tasks complete: call `sdd_transition(implementing→verifying)`
 
 ## Observability
