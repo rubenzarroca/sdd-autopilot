@@ -54,6 +54,95 @@ export function sanitizeMemoryContent(content: string): { clean: boolean; conten
   return { clean: warnings.length === 0, content, warnings };
 }
 
+// ─── GAP-10: Structured Extraction Filter ───────────────────────
+
+const SECTION_PATTERNS: Record<string, RegExp[]> = {
+  project_conventions: [
+    /\buse\s+\S+\s+for\b/i,
+    /\balways\b/i,
+    /\bnever\b/i,
+    /\bprefer\s+\S+\s+over\b/i,
+    /\bnaming\s+convention/i,
+    /\bpattern:/i,
+    /\bconvention:/i,
+  ],
+  learned_patterns: [
+    /\bwhen\s+.+\bdo\b/i,
+    /\bcauses?\b/i,
+    /\bpattern:/i,
+    /\bif\s+.+\bthen\b/i,
+    /\bfixed\s+by\b/i,
+    /\bresolved\s+by\b/i,
+    /\bworkaround:/i,
+  ],
+};
+SECTION_PATTERNS.cross_project_patterns = SECTION_PATTERNS.learned_patterns;
+
+export function validateExtractionFilter(content: string, section: string): { valid: boolean; reason?: string } {
+  const patterns = SECTION_PATTERNS[section];
+  if (!patterns) return { valid: true }; // run_history, agent_performance: no filter
+  for (const p of patterns) {
+    if (p.test(content)) return { valid: true };
+  }
+  return { valid: false, reason: `Content does not match expected patterns for section ${section}` };
+}
+
+// ─── GAP-01: Memory Consolidation ───────────────────────────────
+
+const CONSOLIDATION_THRESHOLDS: Record<string, number> = {
+  learned_patterns: 0.6,
+  project_conventions: 0.7,
+  cross_project_patterns: 0.7,
+};
+
+function tokenize(text: string): Set<string> {
+  return new Set(
+    text.toLowerCase().replace(/[^\w\s]/g, " ").split(/\s+/).filter(t => t.length > 0),
+  );
+}
+
+function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 && b.size === 0) return 1.0;
+  let intersection = 0;
+  for (const token of a) {
+    if (b.has(token)) intersection++;
+  }
+  const union = a.size + b.size - intersection;
+  return union === 0 ? 1.0 : intersection / union;
+}
+
+export function consolidateEntry(
+  existingEntries: string[],
+  newContent: string,
+  section: string,
+): { action: "create" | "update" | "skip"; targetIndex?: number; reason: string; similarity_score?: number } {
+  const threshold = CONSOLIDATION_THRESHOLDS[section];
+  if (threshold === undefined) {
+    return { action: "create", reason: "Section skips consolidation" };
+  }
+
+  const newTokens = tokenize(newContent);
+  let bestScore = 0;
+  let bestIndex = -1;
+
+  for (let i = 0; i < existingEntries.length; i++) {
+    const existingTokens = tokenize(existingEntries[i]);
+    const score = jaccardSimilarity(newTokens, existingTokens);
+    if (score > bestScore) {
+      bestScore = score;
+      bestIndex = i;
+    }
+  }
+
+  if (bestScore >= 1.0) {
+    return { action: "skip", targetIndex: bestIndex, reason: "Identical entry already exists", similarity_score: bestScore };
+  }
+  if (bestScore > threshold) {
+    return { action: "update", targetIndex: bestIndex, reason: `Similar entry found (Jaccard=${bestScore.toFixed(3)})`, similarity_score: bestScore };
+  }
+  return { action: "create", reason: bestScore > 0 ? `No similar entry above threshold (best=${bestScore.toFixed(3)})` : "No similar entries found", similarity_score: bestScore };
+}
+
 // ─── Types ───────────────────────────────────────────────────────
 
 export interface ProjectMemory {

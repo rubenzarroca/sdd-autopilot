@@ -3,7 +3,11 @@
 // All deterministic — no LLM calls.
 
 import { readFile, writeFile, mkdir, appendFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { join, resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 import type { PhaseMetrics, RunSummary, AnalyticsResult, AnalyticsTrend } from "./types.js";
 import { fileExists, parseJsonl } from "./utils.js";
 import { StateManager } from "./state.js";
@@ -778,4 +782,48 @@ export async function handleValidateMetrics(params: {
   }
 
   return { valid: errors.length === 0, errors, warnings };
+}
+
+// ─── sdd_get_manifest ─────────────────────────────────────────────
+
+export async function handleGetManifest(_params: {
+  project_path?: string;
+}): Promise<unknown> {
+  const manifestPath = resolve(__dirname, "tools-manifest.json");
+  try {
+    const manifest = JSON.parse(await readFile(manifestPath, "utf-8"));
+    return manifest;
+  } catch {
+    return { error: "tools-manifest.json not found. Run 'npm run build' first." };
+  }
+}
+
+// ─── sdd_breadcrumb ───────────────────────────────────────────────
+
+export async function handleBreadcrumb(params: {
+  project_path: string;
+  feature_id: string;
+  phase: string;
+  agent: string;
+  decision: string;
+  reasoning: string;
+  alternatives_considered?: string[];
+}): Promise<unknown> {
+  const analyticsDir = resolve(params.project_path, ".sdd", "analytics");
+  await mkdir(analyticsDir, { recursive: true });
+
+  const breadcrumb = {
+    feature_id: params.feature_id,
+    phase: params.phase,
+    agent: params.agent,
+    decision: params.decision,
+    reasoning: params.reasoning,
+    alternatives_considered: params.alternatives_considered ?? [],
+    timestamp: new Date().toISOString(),
+  };
+
+  const breadcrumbsPath = join(analyticsDir, "breadcrumbs.jsonl");
+  await appendFile(breadcrumbsPath, JSON.stringify(breadcrumb) + "\n", "utf-8");
+
+  return { recorded: true, breadcrumb };
 }

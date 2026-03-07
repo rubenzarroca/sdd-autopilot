@@ -37,6 +37,8 @@ import {
   handleCompareRuns,
   handleDetectAnomaly,
   handleValidateMetrics,
+  handleGetManifest,
+  handleBreadcrumb,
 } from "./observability.js";
 
 import {
@@ -1361,6 +1363,60 @@ export const TOOLS = [
       },
     },
   },
+
+  // ─── GAP-05: Tool Definition Versioning ─────────────────────────────
+  {
+    name: "sdd_get_manifest",
+    description: "Get the tools manifest: SHA-256 hash of all tool definitions, tool count, and server version. Use to detect tool definition drift between environments.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        project_path: { type: "string", description: "Not used — manifest is server-side. Included for consistency." },
+      },
+      required: [],
+    },
+    outputSchema: {
+      type: "object" as const,
+      properties: {
+        tools_hash: { type: "string", description: "SHA-256 hash of the serialized TOOLS array" },
+        tools_count: { type: "number", description: "Number of registered tools" },
+        version: { type: "string", description: "Server version from package.json" },
+        computed_at: { type: "string", description: "ISO timestamp when manifest was last computed" },
+      },
+      description: "Tools manifest with hash, count, version, and computation timestamp",
+    },
+  },
+
+  // ─── GAP-07: Subagent Breadcrumbs ───────────────────────────────────
+  {
+    name: "sdd_breadcrumb",
+    description: "Record a subagent decision breadcrumb. Appends to .sdd/analytics/breadcrumbs.jsonl. Use when a subagent makes an architectural decision or chooses between alternatives.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        project_path: { type: "string", description: "Absolute path to the project root" },
+        feature_id: { type: "string", description: "Feature identifier" },
+        phase: { type: "string", description: "Pipeline phase where decision was made" },
+        agent: { type: "string", description: "Agent that made the decision" },
+        decision: { type: "string", description: "What was decided" },
+        reasoning: { type: "string", description: "Why this decision was made" },
+        alternatives_considered: {
+          type: "array",
+          items: { type: "string" },
+          description: "Other options that were considered",
+        },
+      },
+      required: ["project_path", "feature_id", "phase", "agent", "decision", "reasoning"],
+    },
+    outputSchema: {
+      type: "object" as const,
+      properties: {
+        recorded: { type: "boolean", description: "Whether the breadcrumb was recorded" },
+        breadcrumb: { type: "object", description: "The persisted breadcrumb object" },
+      },
+      description: "Confirmation with the recorded breadcrumb",
+    },
+  },
 ];
 
 // ─── Tool dispatcher ─────────────────────────────────────────────
@@ -1391,6 +1447,8 @@ export const HANDLER_MAP: Record<string, HandlerFn> = {
   sdd_compare_runs:        handleCompareRuns,
   sdd_detect_anomaly:      handleDetectAnomaly,
   sdd_validate_metrics:    handleValidateMetrics,
+  sdd_get_manifest:        handleGetManifest,
+  sdd_breadcrumb:          handleBreadcrumb,
   // Metacognition Layer (Phase 2+)
   sdd_compute_score:        handleComputeScore,
   sdd_get_patterns:         handleGetPatterns,

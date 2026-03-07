@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 import { execSync } from "node:child_process";
 import { homedir } from "node:os";
 import { StateManager, AGENT_PERMISSIONS } from "./state.js";
-import { MemoryManager, sanitizeMemoryContent } from "./memory.js";
+import { MemoryManager, sanitizeMemoryContent, validateExtractionFilter, consolidateEntry } from "./memory.js";
 import type { AgentId, FeatureState, PipelineContracts } from "./types.js";
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -549,6 +549,23 @@ export async function handleMemoryWrite(params: {
     await appendFile(signalsPath, JSON.stringify(warning) + "\n", "utf-8");
   }
 
+  // GAP-10: Extraction filter — validate content matches expected section patterns
+  const extraction = validateExtractionFilter(params.content, params.section);
+  if (!extraction.valid && params.feature_id) {
+    const runDir = resolve(params.project_path, ".sdd", "runs", params.feature_id);
+    await mkdir(runDir, { recursive: true });
+    const signalsPath = join(runDir, "signals.jsonl");
+    const extractionWarning = {
+      signal_type: "extraction_filter_warning",
+      reason: extraction.reason,
+      section: params.section,
+      content_preview: params.content.slice(0, 100),
+      agent: params.agent ?? "unknown",
+      timestamp,
+    };
+    await appendFile(signalsPath, JSON.stringify(extractionWarning) + "\n", "utf-8");
+  }
+
   // GAP-02: Build provenance metadata comment
   const confidence = Math.max(0, Math.min(1, params.confidence ?? 0.5));
   const provenanceComment = `<!-- provenance: ${JSON.stringify({
@@ -562,14 +579,45 @@ export async function handleMemoryWrite(params: {
   // Prepend provenance to content for storage
   const contentWithProvenance = `${provenanceComment}\n${params.content}`;
 
+  // Helper to get existing entries for a section (split by double-newline blocks)
+  const getExistingEntries = (sectionName: string, filePath: string): string[] => {
+    const fileContent = readFileSync(filePath, "utf-8");
+    const sectionBody = mm.extractSection(fileContent, sectionName);
+    if (!sectionBody || sectionBody.startsWith("(no ")) return [];
+    return sectionBody.split("\n\n").filter(b => b.trim());
+  };
+
   if (params.scope === "project") {
     // Initialize if not exists
     mm.initProjectMemory("project", "");
 
     if (params.section === "learned_patterns") {
+      // GAP-01: Consolidation check
+      const existing = getExistingEntries("Learned Patterns", mm.projectMemoryPath);
+      const consolidation = consolidateEntry(existing, params.content, params.section);
+
+      if (consolidation.action === "skip") {
+        const result: Record<string, unknown> = { written: false, action: "skipped", reason: consolidation.reason, similarity_score: consolidation.similarity_score, timestamp, confidence };
+        if (!extraction.valid) result.extraction_warning = extraction.reason;
+        return result;
+      }
+      if (consolidation.action === "update" && consolidation.targetIndex !== undefined) {
+        // Replace the target entry with the new one
+        existing[consolidation.targetIndex] = contentWithProvenance;
+        mm.replaceLearnedPatterns(existing.join("\n\n"));
+        const result: Record<string, unknown> = { written: true, action: "updated", reason: consolidation.reason, similarity_score: consolidation.similarity_score, timestamp, confidence };
+        if (!extraction.valid) result.extraction_warning = extraction.reason;
+        if (!sanitization.clean) result.sanitization_warnings = sanitization.warnings;
+        return result;
+      }
+      // action === "create"
       mm.appendLearnedPatterns([contentWithProvenance], undefined, params.ttl ?? 15);
+      const result: Record<string, unknown> = { written: true, action: "created", reason: consolidation.reason, similarity_score: consolidation.similarity_score, timestamp, confidence };
+      if (!extraction.valid) result.extraction_warning = extraction.reason;
+      if (!sanitization.clean) result.sanitization_warnings = sanitization.warnings;
+      return result;
     } else if (params.section === "run_history") {
-      // Append raw content to run history
+      // Append raw content to run history (no consolidation for run_history)
       const content = readFileSync(mm.projectMemoryPath, "utf-8");
       const existing = mm.extractSection(content, "Run History");
       const body = existing.startsWith("(no runs") ? contentWithProvenance : `${existing.trim()}\n\n${contentWithProvenance}`;
@@ -579,6 +627,29 @@ export async function handleMemoryWrite(params: {
       );
       writeFileSync(mm.projectMemoryPath, updated, "utf-8");
     } else if (params.section === "project_conventions") {
+      // GAP-01: Consolidation check
+      const existing = getExistingEntries("Project Conventions", mm.projectMemoryPath);
+      const consolidation = consolidateEntry(existing, params.content, params.section);
+
+      if (consolidation.action === "skip") {
+        const result: Record<string, unknown> = { written: false, action: "skipped", reason: consolidation.reason, similarity_score: consolidation.similarity_score, timestamp, confidence };
+        if (!extraction.valid) result.extraction_warning = extraction.reason;
+        return result;
+      }
+      if (consolidation.action === "update" && consolidation.targetIndex !== undefined) {
+        existing[consolidation.targetIndex] = contentWithProvenance;
+        const fileContent = readFileSync(mm.projectMemoryPath, "utf-8");
+        const updated = fileContent.replace(
+          new RegExp(`(## Project Conventions\\s*\\n)[\\s\\S]*?(?=\\n## |$)`),
+          `$1${existing.join("\n\n")}\n\n`,
+        );
+        writeFileSync(mm.projectMemoryPath, updated, "utf-8");
+        const result: Record<string, unknown> = { written: true, action: "updated", reason: consolidation.reason, similarity_score: consolidation.similarity_score, timestamp, confidence };
+        if (!extraction.valid) result.extraction_warning = extraction.reason;
+        if (!sanitization.clean) result.sanitization_warnings = sanitization.warnings;
+        return result;
+      }
+      // action === "create"
       const content = readFileSync(mm.projectMemoryPath, "utf-8");
       const updated = content.replace(
         new RegExp(`(## Project Conventions\\s*\\n)[\\s\\S]*?(?=\\n## |$)`),
@@ -591,15 +662,41 @@ export async function handleMemoryWrite(params: {
     mm.initUserMemory();
 
     if (params.section === "cross_project_patterns") {
+      // GAP-01: Consolidation check
+      const existing = getExistingEntries("Cross-Project Patterns", mm.userMemoryPath);
+      const consolidation = consolidateEntry(existing, params.content, params.section);
+
+      if (consolidation.action === "skip") {
+        const result: Record<string, unknown> = { written: false, action: "skipped", reason: consolidation.reason, similarity_score: consolidation.similarity_score, timestamp, confidence };
+        if (!extraction.valid) result.extraction_warning = extraction.reason;
+        return result;
+      }
+      if (consolidation.action === "update" && consolidation.targetIndex !== undefined) {
+        existing[consolidation.targetIndex] = contentWithProvenance;
+        const fileContent = readFileSync(mm.userMemoryPath, "utf-8");
+        const sectionBody = existing.join("\n\n");
+        const updated = fileContent.replace(
+          new RegExp(`(## Cross-Project Patterns\\s*\\n)[\\s\\S]*?(?=\\n## |$)`),
+          `$1${sectionBody}\n\n`,
+        );
+        writeFileSync(mm.userMemoryPath, updated, "utf-8");
+        const result: Record<string, unknown> = { written: true, action: "updated", reason: consolidation.reason, similarity_score: consolidation.similarity_score, timestamp, confidence };
+        if (!extraction.valid) result.extraction_warning = extraction.reason;
+        if (!sanitization.clean) result.sanitization_warnings = sanitization.warnings;
+        return result;
+      }
+      // action === "create"
       mm.appendCrossProjectPattern(contentWithProvenance);
     } else if (params.section === "agent_performance") {
+      // No consolidation for agent_performance
       mm.appendAgentPerformanceNote(params.agent ?? "unknown", contentWithProvenance);
     } else {
-      return { written: false, reason: `Section "${params.section}" is not supported for user scope. Use "cross_project_patterns" or "agent_performance".` };
+      return { written: false, action: "skipped", reason: `Section "${params.section}" is not supported for user scope. Use "cross_project_patterns" or "agent_performance".` };
     }
   }
 
-  const result: Record<string, unknown> = { written: true, timestamp, confidence };
+  const result: Record<string, unknown> = { written: true, action: "created", timestamp, confidence };
+  if (!extraction.valid) result.extraction_warning = extraction.reason;
   if (!sanitization.clean) {
     result.sanitization_warnings = sanitization.warnings;
   }
