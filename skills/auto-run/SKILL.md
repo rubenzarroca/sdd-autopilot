@@ -70,6 +70,15 @@ You are the orchestrator for the SDD Autopilot pipeline. You coordinate the full
      ```
    - After creating the file, call `sdd_get_state` again to confirm it loaded correctly before proceeding.
    - Report to the user: "Project not initialized — auto-initialized at {path}. Starting pipeline..."
+
+3b. **Auto-recover incomplete runs**: After `sdd_get_state` succeeds, check if any feature in `state.features` has a state that is NOT `pr_created`, `merged`, or `draft`. If found:
+   - This means a previous run was interrupted (e.g. by context compaction).
+   - Read the incomplete feature's `feature_id` from state (do NOT hardcode — use `Object.keys(state.features)` and filter by state).
+   - Check `.sdd/runs/{feature_id}/` for missing artifacts (same detection logic as `--recover`).
+   - Execute the recovery flow automatically: emit missing metrics, run missing post-pipeline steps, show the observability report.
+   - Report: "Recovered incomplete run for '{feature_id}'. {N} missing steps completed."
+   - After recovery, continue to step 4 with the NEW feature from `$ARGUMENTS`.
+
 4. **Create the feature entry**: Before calling any MCP tool that operates on a feature, add the feature to `state.json` by writing it directly (there is no `sdd_create_feature` tool). The feature entry MUST use this exact schema — missing fields will cause `sdd_transition` to crash:
    ```json
    "{feature-id}": {
@@ -688,7 +697,7 @@ After step 9 (sdd_memory_write), proceed to the Adaptive Run Close sequence.
 
 - `--skip-worktree`: Work directly in the project directory instead of creating a git worktree. Skips `worktree-pr start`, `finish`, and `cleanup`. pr-creator handles all git operations as before.
 - `--skip-pr`: Skip the PR creation step (useful for testing). Commits to worktree branch but does not push or open PR. Worktree cleanup is also skipped.
-- `--recover <feature_id>`: Resume an incomplete run. Detects what completed and what's missing, then executes only the remaining steps. Recovery flow:
+- `--recover <feature_id>`: Manually resume an incomplete run (auto-recovery runs automatically at pipeline start, so this flag is only needed if you want to recover without starting a new feature). Recovery flow:
 
   1. Call `sdd_get_state(project_path)` and read the feature's current state.
   2. Check `.sdd/runs/{feature_id}/` for existing artifacts:
