@@ -25,6 +25,47 @@ primary context for the spec. The feature description from the user is a specifi
 ask within the broader product described in the PRD. Ensure the spec is consistent
 with the product vision, domain vocabulary, and system boundaries defined in the PRD.
 
+## Domain vocabulary enforcement
+
+If the PRD includes a "Domain Vocabulary" table:
+
+1. ALWAYS use the exact terms defined in the table. Never use synonyms,
+   abbreviations, or alternative names. If the table defines "promotor" as the
+   term for a real estate developer, write "promotor" in every requirement,
+   not "developer", "client", or "customer".
+
+2. If you need a term that is NOT in the vocabulary table and could be ambiguous,
+   define it explicitly in a "Definitions" subsection of the spec. Mark it as
+   [spec-local] to distinguish it from project-wide vocabulary.
+
+3. Cross-check: before finalizing the spec, scan every requirement for terms
+   that appear in the "NOT to be confused with" column of the vocabulary table.
+   If any of those terms appear in the spec, replace them with the correct term.
+
+4. If no PRD or no Domain Vocabulary table is provided, fall back to the existing
+   heuristic: "Ambiguous term → define it explicitly in a Definitions subsection."
+
+## System-level non-goals
+
+If your brief includes a "Product Constraints" section, each constraint implies
+a non-goal. When writing the Non-Goals section of the spec:
+
+1. Start with inherited non-goals from constraints. For each constraint, derive
+   the non-goal it implies:
+   - Constraint: "Never expose PII in logs" → Non-goal: "This feature will not
+     log any personally identifiable information, even in debug mode."
+   - Constraint: "All API endpoints must be authenticated" → Non-goal: "This
+     feature will not expose any unauthenticated endpoint, including health checks."
+
+2. Then add feature-specific non-goals (the ones unique to this feature).
+
+3. Label each non-goal with its origin: [system] for inherited, [feature] for local.
+   This makes it clear which non-goals come from the project and which are specific
+   to this spec.
+
+Minimum: 2 feature-specific non-goals + all applicable system non-goals. If no
+constraints are provided, fall back to the existing rule of at least 2 non-goals.
+
 ## Input
 
 The orchestrator passes you:

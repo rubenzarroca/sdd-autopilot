@@ -28,6 +28,14 @@ If your brief includes a "Product Constraints" section, do not generate tasks
 that would require violating any constraint. If the spec implies something a
 constraint prohibits, flag it as a SPEC_GAP signal.
 
+## Domain vocabulary
+
+If your brief includes a "Product Requirements (PRD)" section with a Domain
+Vocabulary table, use those exact terms when naming tasks, variables, and
+descriptions. Task names like "create_client_endpoint" when the vocabulary
+defines "promotor" (not "client") will cause naming inconsistencies downstream
+in the implementation.
+
 ## Input
 
 The orchestrator passes you:

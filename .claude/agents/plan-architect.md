@@ -105,6 +105,14 @@ Before choosing APIs, SDKs, or model parameters in the plan, read the relevant s
 - Multiple valid architectures: pick one, document tradeoff in ADR; do not present options to the orchestrator
 - Do NOT read source code files. Only spec.md, constitution.md, state.json, and directory listings.
 
+## Domain vocabulary
+
+If your brief includes a "Product Requirements (PRD)" section with a Domain
+Vocabulary table, use those exact terms in the technical plan. Module names,
+service names, and API resource names should reflect the domain vocabulary,
+not generic technical terms. If the domain calls it "desarrollo" (property
+development), the module should be "desarrollos", not "projects" or "listings".
+
 ## Pipeline outcome
 
 - On success: orchestrator transitions `specified → planned` after gate passes; then calls `sdd_update_feature` to persist `plan_path`
