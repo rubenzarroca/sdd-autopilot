@@ -638,6 +638,28 @@ After step 9 (sdd_memory_write), proceed to the Adaptive Run Close sequence.
 - `--skip-worktree`: Work directly in the project directory instead of creating a git worktree. Skips `worktree-pr start`, `finish`, and `cleanup`. pr-creator handles all git operations as before.
 - `--skip-pr`: Skip the PR creation step (useful for testing). Commits to worktree branch but does not push or open PR. Worktree cleanup is also skipped.
 
+## Post-pipeline iterations
+
+After showing the completion summary, the user may request changes ("te faltó X", "cambia Y", "añade Z"). These are **post-pipeline iterations** — work done after the formal pipeline ended. Track them for observability:
+
+For each user-requested change after the pipeline summary:
+
+1. Log the iteration start:
+   ```
+   sdd_log_event(project_path, feature_id, event_type="post_pipeline_iteration",
+     phase="post_pipeline", agent_id="orchestrator",
+     data={ iteration: N, user_request: "{brief summary of what user asked}" })
+   ```
+2. Execute the change — launch `implementation-engine` as a subagent (same as phase 5), pointing at the worktree/project path. Do NOT use external skills.
+3. Log the iteration end:
+   ```
+   sdd_log_event(project_path, feature_id, event_type="post_pipeline_iteration_done",
+     phase="post_pipeline", agent_id="orchestrator",
+     data={ iteration: N, files_changed: N })
+   ```
+
+These events feed into `sdd_run_retro` and `sdd_get_analytics`, making post-pipeline rework visible. If a pattern emerges (e.g. "user always asks for X after pipeline"), the retro can surface it.
+
 ## Adaptive Orchestrator
 
 Runs once after triage, before specify. Modifies pipeline based on learned patterns and experiments.
