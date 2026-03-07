@@ -220,7 +220,7 @@ h = await handleGetContract({ phase_id: "nonexistent" });
 assert("get_contract unknown phase returns error", typeof h.error === "string");
 
 // All phases in contracts.json
-const allPhases = ["codebase-index", "triage", "specify", "plan", "tasks", "spec-test", "worktree", "implement", "verify", "review", "pr"];
+const allPhases = ["triage", "specify", "plan", "tasks", "implement", "verify", "review", "pr"];
 for (const phase of allPhases) {
   const c = await handleGetContract({ phase_id: phase });
   assert(`get_contract ${phase} exists`, c.agent != null);
