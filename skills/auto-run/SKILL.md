@@ -146,7 +146,13 @@ For each phase:
      ```
      This persists to `.sdd/runs/{feature_id}/phase_confidence.json` (upserts per feature+phase). The data feeds into `sdd_get_run_summary` (which computes `avg_confidence`) and `sdd_check_thresholds` (which alerts on low average confidence).
    - For plan phase: call `mcp__sdd-autopilot__sdd_update_feature` to persist `plan_path` on the feature
-   - For tasks phase: call `mcp__sdd-autopilot__sdd_update_feature` to persist `tasks_path` on the feature
+   - For tasks phase:
+     1. Call `mcp__sdd-autopilot__sdd_update_feature` to persist `tasks_path` on the feature
+     2. **Register each task in state.json**: Parse `tasks.md` for task IDs (e.g. `TASK-001`, `TASK-002`) and write them into `feature.tasks` in state.json via direct file write. Each entry must follow this schema:
+        ```json
+        "TASK-001": { "status": "pending", "completed_at": null }
+        ```
+        This is REQUIRED — `sdd_transition(decomposed→implementing)` will reject with `PRECONDITION_FAILED` if `feature.tasks` is empty. Call `sdd_get_state` after writing to confirm tasks are registered.
 9. If gate failed: call `mcp__sdd-autopilot__sdd_classify_failure` to determine the category:
    - `implementation_bug`: enter fix loop (see below)
    - `spec_gap`: pause and communicate to the user; wait for input
