@@ -74,6 +74,28 @@ For each phase:
      - review: REVIEW_RESULT.decision=APPROVE → call `sdd_transition(reviewing→pr_created)`. REQUEST_CHANGES → call `sdd_transition(reviewing→fix_review)` then enter fix loop.
    - Call `mcp__sdd-autopilot__sdd_emit_metrics` with the PhaseMetrics for this phase (see Observability section below for the schema)
    - Call `sdd_log_event` with event_type `"phase_complete"`, data `{ gate_result: "passed", phase }` (see Observability section)
+   - Call `mcp__sdd-autopilot__sdd_phase_confidence` to record the orchestrator's confidence in this phase's output. Assign confidence based on how the phase resolved:
+     - Gate passed clean (first attempt, no fix loops) → `confidence: 0.85`
+     - Gate passed after 1 fix loop → `confidence: 0.65`
+     - Gate passed after 2+ fix loops → `confidence: 0.45`
+     - If pair review (opus-coach) required a revision → subtract `0.1` from the above value
+     - If the output is marked partial or incomplete → cap at `confidence: 0.5` max
+     ```
+     mcp__sdd-autopilot__sdd_phase_confidence(
+       project_path,
+       feature_id,
+       phase="{phase_name}",
+       confidence={computed_value},        // 0.0–1.0 per criteria above
+       reasoning="{why this confidence}",  // e.g. "Gate passed first attempt, no pair review revision"
+       factors={                           // optional: breakdown of influencing factors
+         gate_attempts: N,
+         fix_loops: N,
+         pair_review_revised: true|false,
+         partial_output: true|false
+       }
+     )
+     ```
+     This persists to `.sdd/runs/{feature_id}/phase_confidence.json` (upserts per feature+phase). The data feeds into `sdd_get_run_summary` (which computes `avg_confidence`) and `sdd_check_thresholds` (which alerts on low average confidence).
    - For plan phase: call `mcp__sdd-autopilot__sdd_update_feature` to persist `plan_path` on the feature
    - For tasks phase: call `mcp__sdd-autopilot__sdd_update_feature` to persist `tasks_path` on the feature
 9. If gate failed: call `mcp__sdd-autopilot__sdd_classify_failure` to determine the category:
@@ -241,15 +263,96 @@ sdd_emit_metrics(project_path, metrics={
 
 ## Signal routing
 
-During the pipeline, agents may emit signals via `sdd_append_signal`. Route them as follows:
+During the pipeline, agents may emit signals via `sdd_append_signal`. The orchestrator routes each signal based on its type. Signals are read at each phase boundary -- before launching the next subagent, call `mcp__sdd-autopilot__sdd_get_state` with `feature_id` and read `feature.signals`.
 
-| Signal type | Routing |
-|------------|---------|
-| ATTENTION_REQUIRED | Inject into next agent's context |
-| PATTERN_DETECTED | Store in memory; inject into same-type agents |
-| DEPENDENCY_WARNING | Inject into plan-architect if re-planning; inject into implementation-engine |
-| CONTEXT_NOTE | Inject into immediately downstream agent only |
-| META_LEARNING_HINT | Buffer; process after pr_created (run haiku-analyst in retro mode) |
+### Signal processing protocol
+
+At the start of each phase (after step 1 of the phase protocol -- reading current feature state):
+
+1. Read `feature.signals` from the `sdd_get_state` response.
+2. Filter signals that have not yet been processed. Track processed signal indices in a local `processed_signals` set (initialized empty at pipeline start).
+3. For each unprocessed signal, route based on `signal.type`:
+
+### ATTENTION_REQUIRED
+
+**Mechanism:** Inject into the next subagent context.
+
+1. Read the signal `content` field.
+2. Prepend to the next Agent tool prompt under a `## Attention Signals` header:
+   ```
+   ## Attention Signals
+   The following issues were flagged by a previous agent and require your attention:
+   - [{signal.source}]: {signal.content}
+   ```
+3. Mark signal as processed.
+
+### PATTERN_DETECTED
+
+**Mechanism:** Store in project memory and inject into agents of the same type.
+
+1. Call `mcp__sdd-autopilot__sdd_memory_write` to persist the pattern:
+   ```
+   mcp__sdd-autopilot__sdd_memory_write(
+     project_path: "{project_path}",
+     scope:        "project",
+     content:      "Pattern detected by {signal.source}: {signal.content}",
+     section:      "patterns"
+   )
+   ```
+2. For subsequent phases, check if the next subagent is of the same type as `signal.source` (e.g., both are `implementation-engine`). If so, inject into the Agent tool prompt:
+   ```
+   ## Detected Patterns
+   - [{signal.source}]: {signal.content}
+   ```
+3. Mark signal as processed after memory write.
+
+### DEPENDENCY_WARNING
+
+**Mechanism:** Inject into plan-architect (if re-planning) and implementation-engine.
+
+1. Accumulate all DEPENDENCY_WARNING signals into a `dependency_warnings` list.
+2. When launching `plan-architect` (phase 3, or during a re-plan triggered by SPEC_GAP): include in prompt:
+   ```
+   ## Dependency Warnings
+   {for each warning: "- [{signal.source}]: {signal.content}"}
+   ```
+3. When launching `implementation-engine` (phase 5, any task): include in prompt:
+   ```
+   ## Dependency Warnings
+   {for each warning: "- [{signal.source}]: {signal.content}"}
+   ```
+4. Mark signals as processed after the last implementation-engine task completes.
+
+### CONTEXT_NOTE
+
+**Mechanism:** Inject into the immediately downstream agent only.
+
+1. Read the signal `content` field.
+2. Inject into the NEXT subagent prompt (the one immediately following the agent that emitted the signal) under:
+   ```
+   ## Context Notes
+   - [{signal.source}]: {signal.content}
+   ```
+3. Mark signal as processed after that single injection. Do NOT propagate to further downstream agents.
+
+### META_LEARNING_HINT
+
+**Mechanism:** Buffer until post-pipeline; process in batch.
+
+1. Do NOT inject into any subagent context during the pipeline.
+2. Accumulate all META_LEARNING_HINT signals into a `meta_learning_buffer` list (initialized empty at pipeline start).
+3. After PR creation (post-pipeline step 8 -- "Process buffered META_LEARNING_HINT signals"):
+   a. For each buffered hint, call `mcp__sdd-autopilot__sdd_memory_write`:
+      ```
+      mcp__sdd-autopilot__sdd_memory_write(
+        project_path: "{project_path}",
+        scope:        "project",
+        content:      "Meta-learning hint from {signal.source}: {signal.content}",
+        section:      "learnings"
+      )
+      ```
+   b. Feed the full buffer as context to `haiku-analyst` in retro mode (post-pipeline step 7), so the retro can incorporate meta-learning observations.
+4. Mark all META_LEARNING_HINT signals as processed after the retro completes.
 
 ## Error handling
 
@@ -299,12 +402,95 @@ If `--skip-pr` is set: skip step 2b (push + PR creation) but still commit in the
 After PR creation succeeds:
 1. Call `mcp__sdd-autopilot__sdd_get_run_summary` with `project_path`, `feature_id`, and the `run_id` from step 2. This aggregates all PhaseMetrics into a RunSummary, persists `summary.json`, and appends to `analytics/history.jsonl`. After the call, patch `review_decision` in `summary.json` using the review agent's structured output (`APPROVE` → `"approve"`, `REQUEST_CHANGES` → `"request_changes"`).
 2. Call `mcp__sdd-autopilot__sdd_compute_score` with `project_path` and `feature_id`. This reads the patched `summary.json` and `analytics/history.jsonl`, computes quality + efficiency scores, and persists `pipeline_score` back into `summary.json`. Log the returned `pipeline_score` in the user-facing completion message.
-3. Run `haiku-analyst` in retro mode (compare first-pass diff with final diff)
-4. Process buffered META_LEARNING_HINT signals
-5. Write learnings to memory via `sdd_memory_write`
-6. Call `mcp__sdd-autopilot__sdd_tick_decay` to decrement TTLs on learned patterns and prune stale entries
-7. Call `mcp__sdd-autopilot__sdd_tick_patterns` to decrement TTLs on ExploitationPatterns and decay expired ones
-5. **Worktree cleanup** (if worktree was created and PR is merged):
+3. Call `mcp__sdd-autopilot__sdd_check_thresholds` to detect when metrics cross warning/critical thresholds:
+   ```
+   mcp__sdd-autopilot__sdd_check_thresholds(
+     project_path,
+     feature_id
+   )
+   ```
+   The tool checks per-phase fix loop counts (relative to contracts.json caps), duration ratios vs historical averages, run-level first_pass_rate, total_duration, and average phase confidence. It returns an `alerts` array where each alert has a `level` ("warning" or "critical") and a descriptive `message`.
+
+   **Handle the response:**
+   - If any alert has `level: "critical"`:
+     - Emit a WARNING signal via `mcp__sdd-autopilot__sdd_append_signal`:
+       ```
+       sdd_append_signal(project_path, feature_id, signal={
+         type: "ATTENTION_REQUIRED",
+         source: "orchestrator",
+         message: "Critical threshold alert: {alert.message}",
+         data: { alerts: critical_alerts }
+       })
+       ```
+     - Log via `mcp__sdd-autopilot__sdd_log_event`:
+       ```
+       sdd_log_event(project_path, feature_id, event_type="threshold_alert", phase="post_pipeline", agent_id="orchestrator",
+         data={ alert_count: N, critical_count: N, warning_count: N, alerts: alerts })
+       ```
+     - Store the critical alerts in a `threshold_alerts` variable — pass them to `sdd_run_retro` context (step 6) and to haiku-analyst (step 7).
+   - If alerts exist but all are `level: "warning"`: store them for retro context only. Do not emit a signal.
+   - If `alerts` is empty: proceed normally.
+
+4. Call `mcp__sdd-autopilot__sdd_detect_anomaly` to check if this run is statistically anomalous:
+   ```
+   mcp__sdd-autopilot__sdd_detect_anomaly(
+     project_path,
+     feature_id
+   )
+   ```
+   The tool computes z-scores for `total_duration_ms`, `first_pass_rate`, `pipeline_score`, and `avg_confidence` against the historical distribution (requires >= 5 prior runs). Default sensitivity is 2.0 standard deviations.
+
+   **Handle the response:**
+   - If `is_anomaly: true`:
+     - Flag this run as anomalous. Store the anomaly details (`anomalies` array with `metric`, `value`, `mean`, `stddev`, `z_score` for each flagged metric) in an `anomaly_context` variable.
+     - **Do NOT promote any patterns from this run** — skip `sdd_promote_pattern` calls during the haiku-analyst retro step.
+     - Include `anomaly_context` in the retro and haiku-analyst context.
+   - If `is_anomaly: false` or `status: "insufficient_data"`: proceed normally. Pattern promotion is allowed.
+
+5. Conditionally call `mcp__sdd-autopilot__sdd_set_golden` if the pipeline score beats the current golden baseline:
+   ```
+   mcp__sdd-autopilot__sdd_set_golden(
+     project_path,
+     feature_id
+   )
+   ```
+   **When to call:**
+   - Read `golden_comparison` from the `sdd_compute_score` response (step 2):
+     - If `golden_comparison.status: "no_golden_set"` → always call `sdd_set_golden` (first golden baseline).
+     - If `golden_comparison.status: "meets_golden"` and `golden_comparison.current_score > golden_comparison.golden_score` → call `sdd_set_golden` (new high score).
+     - If `golden_comparison.status: "below_threshold"` or `current_score <= golden_score` → do NOT call. Log: "Score {pipeline_score} did not beat current golden {golden_score}".
+
+   **Handle the response:**
+   - If `success: true`: log to the user: "New golden baseline set: {pipeline_score} (feature: {feature_id})"
+   - If the tool returns an error: log the error but do not fail the pipeline.
+
+6. Call `mcp__sdd-autopilot__sdd_run_retro` to generate the structured retrospective before launching haiku-analyst:
+   ```
+   mcp__sdd-autopilot__sdd_run_retro(
+     project_path,
+     feature_id,
+     expected_outcome="clean_pass"   // or "minor_fixes" if fix loops ran, adjust based on actual run
+   )
+   ```
+   The tool reads `summary.json`, computes phase breakdown, identifies bottleneck phases, checks which active patterns were confirmed or contradicted, and produces actionable suggestions. It persists `retro.json` at `.sdd/runs/{feature_id}/retro.json`.
+
+   **Handle the response:**
+   - The returned retro object contains: `phase_breakdown`, `bottlenecks`, `patterns_confirmed`, `patterns_contradicted`, `suggestions`, `pipeline_score`, `outcome`.
+   - Store the retro output path (`.sdd/runs/{feature_id}/retro.json`) — pass it to haiku-analyst in step 7 as additional context.
+   - If threshold alerts (from step 3) or anomaly context (from step 4) exist, include them when launching haiku-analyst so it can incorporate those signals into its analysis.
+
+7. Run `haiku-analyst` in retro mode (compare first-pass diff with final diff). Provide these additional context inputs:
+   - `retro_path`: `.sdd/runs/{feature_id}/retro.json` (from step 6)
+   - `threshold_alerts`: critical/warning alerts (from step 3, if any)
+   - `anomaly_context`: anomaly details (from step 4, if `is_anomaly: true`)
+   - `is_anomalous_run`: boolean flag — if `true`, haiku-analyst must NOT emit `sdd_propose_pattern`, `sdd_promote_pattern`, or `sdd_propose_experiment` calls
+   The haiku-analyst may call `sdd_propose_pattern` to emit ExploitationPattern candidates and `sdd_propose_experiment` to propose an experiment (if this is an exploration turn -- `run_count % 5 == 0`). On anomalous runs, both are suppressed.
+8. Process buffered META_LEARNING_HINT signals
+9. Write learnings to memory via `sdd_memory_write`
+
+After step 9 (sdd_memory_write), proceed to the Adaptive Run Close sequence.
+
+10. **Worktree cleanup** (after Adaptive Run Close completes, if worktree was created and PR is merged):
    - Invoke `worktree-pr cleanup` in automated mode: `repo_path` = project_path, `feature_name` = feature_id
    - This removes the sibling directory, deletes local and remote `feat/{feature-id}` branches, and pulls latest default branch.
    - If PR is not yet merged (e.g. `--skip-pr` was used): skip cleanup and report the worktree path to the user.
@@ -314,63 +500,311 @@ After PR creation succeeds:
 - `--skip-worktree`: Work directly in the project directory instead of creating a git worktree. Skips `worktree-pr start`, `finish`, and `cleanup`. pr-creator handles all git operations as before.
 - `--skip-pr`: Skip the PR creation step (useful for testing). Commits to worktree branch but does not push or open PR. Worktree cleanup is also skipped.
 
-## Adaptive Orchestrator (Decision Tree)
+## Adaptive Orchestrator
 
-The full adaptive decision tree is designed here and activated progressively as tools become available. The orchestrator reads this section at every run start and run close.
+The adaptive orchestrator modifies pipeline behavior based on learned patterns and experiments. It runs two scripted sequences: one at run start (before specify) and one at run close (after post-pipeline). The orchestrator reads this section at every run and executes it deterministically.
 
-### Run start (adaptive routing)
+### ADAPTIVE RUN START
 
+Execute this sequence after triage completes and before the specify phase begins. All values from triage (`feature_type`, `complexity`) must be available.
+
+**Step 1 -- Get applicable patterns:**
 ```
-start of run
-    │
-    ├── [PHASE 3 - ACTIVE] Call `sdd_get_patterns` with feature_type + complexity from triage
-    │   └── filter returns active patterns whose condition matches this run
-    │       └── If active patterns found:
-    │           ├── pattern.type="skip_phase"   → remove that phase from execution sequence
-    │           ├── pattern.type="model_swap"   → override model for that phase
-    │           ├── pattern.type="gate_adjust"  → pass gate threshold override to subagent context
-    │           └── pattern.type="prompt_tuning"→ inject pattern.action into subagent context
-    │
-    └── [PHASE 4 - ACTIVE] Call `sdd_get_patterns` status=all to check experiments.json indirectly; read `.sdd/metacognition/experiments.json` directly
-        └── filter experiments where status="proposed"
-            └── Is this the exploration turn? (run_count % 5 == 0, tracked in analytics/history.jsonl line count)
-                ├── NO  → exploitation mode (apply active patterns, skip experiment)
-                └── YES → check experiment.risk_level
-                    ├── "low" | "medium" → apply experiment.mutation; mark status="running"
-                    └── "high"           → surface to user for approval before applying
-                                           ├── approved → apply + mark status="running"
-                                           └── rejected → mark status="abandoned"; proceed with patterns only
+result = mcp__sdd-autopilot__sdd_get_patterns(
+  project_path:  "{project_path}",
+  status:        "active",
+  feature_type:  "{feature_type from triage}",
+  complexity:    "{complexity from triage}"
+)
+applicable_patterns = result.patterns
+```
+Store `applicable_patterns` in memory for this pipeline run -- it is needed at run close for `sdd_update_pattern`.
+
+**Step 2 -- Apply pattern mutations:**
+For each pattern in `applicable_patterns`, apply based on `pattern.type`:
+
+- `type="skip_phase"`: Parse `pattern.action` to identify the phase to skip (e.g., "skip verify for low-complexity api features"). Remove that phase from the execution sequence. Log:
+  ```
+  sdd_log_event(project_path, feature_id, event_type="phase_skipped", phase="{skipped_phase}", agent_id="orchestrator",
+    data={ pattern_id: "{pattern.pattern_id}", reason: "exploitation_pattern" })
+  ```
+  When emitting metrics for the skipped phase, use `gate_result: "skip"`.
+
+- `type="model_swap"`: Parse `pattern.action` to identify the phase and target model (e.g., "use haiku for plan phase on low-complexity"). Override the model in the phase sequence table for that phase.
+
+- `type="gate_adjust"`: Parse `pattern.action` to get the threshold override (e.g., "relax verify gate to 80% for api features"). Pass the override as context to the subagent when launching that phase.
+
+- `type="prompt_tuning"`: Inject `pattern.action` text into the subagent context for the targeted phase under:
+  ```
+  ## Pattern-Driven Instructions
+  - [{pattern.pattern_id}]: {pattern.action}
+  ```
+
+**Step 3 -- Read experiments:**
+Read `.sdd/metacognition/experiments.json` directly (file read, not a tool call). Filter experiments where `status="proposed"` or `status="running"`.
+
+**Step 4 -- Abandon stale/mismatched experiments:**
+For each experiment from step 3, apply the abandonment checks:
+- Context mismatch: experiment `mutation.feature_type` differs from current `feature_type` from triage.
+- Staleness: `status="running"` AND more than 3 runs elapsed since `created_at` without evaluation.
+
+For each experiment that matches either condition:
+```
+mcp__sdd-autopilot__sdd_abandon_experiment(
+  project_path:  "{project_path}",
+  experiment_id: "{experiment.experiment_id}",
+  reason:        "{context_mismatch or stale_experiment description}"
+)
+```
+Log each abandonment:
+```
+sdd_log_event(project_path, feature_id, event_type="experiment_abandoned", phase="adaptive_start", agent_id="orchestrator",
+  data={ experiment_id: "{experiment_id}", reason: "{reason}" })
+```
+After cleanup, re-read experiments to get the updated list. Only experiments still in `status="proposed"` or `status="running"` proceed to the explore/exploit decision.
+
+**Step 5 -- Determine explore/exploit mode:**
+Count lines in `.sdd/analytics/history.jsonl` to get `run_count`. If the file does not exist, `run_count = 0`.
+```
+if run_count % 5 == 0 AND run_count > 0:
+    mode = "exploration"
+else:
+    mode = "exploitation"
+```
+In exploitation mode, apply patterns only (already done in step 2). Skip to step 7.
+
+**Step 6 -- Apply experiment (exploration mode only):**
+This step only executes if `mode = "exploration"` AND a proposed experiment exists (from step 3, after cleanup).
+
+1. Read the experiment `risk_level`:
+
+   a. **If `risk_level="low"` or `risk_level="medium"`:**
+   - Apply `experiment.mutation` to the pipeline (e.g., if mutation says { "skip_phase": "plan" }, remove plan from the sequence; if mutation says { "model_override": { "implement": "opus" } }, swap the model).
+   - Update experiment status to `"running"` by writing back to `experiments.json`.
+   - Store `experiment_applied = experiment.experiment_id` for use at run close.
+
+   b. **If `risk_level="high"`:**
+   - Surface to the user: "High-risk experiment proposed: {experiment.hypothesis}. Approve? (y/n)"
+   - If approved: apply mutation as in (a), mark `"running"`.
+   - If rejected:
+     ```
+     mcp__sdd-autopilot__sdd_abandon_experiment(
+       project_path:  "{project_path}",
+       experiment_id: "{experiment.experiment_id}",
+       reason:        "user_rejected"
+     )
+     ```
+   - Store `experiment_applied` accordingly (the experiment_id if approved, `null` if rejected).
+
+**Step 7 -- Log adaptive decisions:**
+```
+mcp__sdd-autopilot__sdd_log_event(
+  project_path: "{project_path}",
+  feature_id:   "{feature_id}",
+  event_type:   "adaptive_routing",
+  phase:        "pre_pipeline",
+  agent_id:     "orchestrator",
+  data: {
+    mode:               "{exploitation|exploration}",
+    run_count:          {run_count},
+    patterns_applied:   ["{pattern_id_1}", "{pattern_id_2}", ...],
+    phases_skipped:     ["{phase_1}", ...],
+    model_overrides:    { "{phase}": "{model}", ... },
+    experiment_applied: "{experiment_id}" | null
+  }
+)
 ```
 
-**Phase 1 behaviour (current):** No patterns or experiments exist yet. Run start proceeds without modifications.
+Continue to the specify phase (or the first non-skipped phase).
 
-### Run close (metacognition update)
+### ADAPTIVE RUN CLOSE
 
+Execute this sequence after the post-pipeline steps complete (steps 1-9: `sdd_get_run_summary`, `sdd_compute_score`, `sdd_check_thresholds`, `sdd_detect_anomaly`, `sdd_set_golden`, `sdd_run_retro`, haiku-analyst retro, META_LEARNING_HINT processing, `sdd_memory_write`). This section covers only the metacognition-specific steps.
+
+**Step 1 -- Update pattern outcomes (sdd_update_pattern):**
+
+For each pattern in the `applicable_patterns` list stored at run start:
+
+1. Read `pipeline_score` from `.sdd/runs/{feature_id}/summary.json`.
+2. Read `golden_score` from `.sdd/analytics/golden.json`. If no golden exists, compute `historical_mean` from `.sdd/analytics/history.jsonl` (average of all non-null `pipeline_score` values). Use whichever is available as `baseline`.
+3. Determine outcome:
+   - `pipeline_score >= baseline`: call with `outcome="success"`
+   - `pipeline_score < baseline * 0.9`: call with `outcome="failure"`
+   - Between `baseline * 0.9` and `baseline`: skip (ambiguous zone, no update)
+4. For each pattern with a determined outcome:
+   ```
+   mcp__sdd-autopilot__sdd_update_pattern(
+     project_path: "{project_path}",
+     pattern_id:   "{pattern.pattern_id}",
+     outcome:      "success" | "failure"
+   )
+   ```
+
+**Step 2 -- Evaluate experiment (exploration runs only):**
+
+If this was an exploration run AND `experiment_applied` is not null:
+
+1. Read `pipeline_score` (result score) and the previous run `pipeline_score` from `history.jsonl` (baseline score, second-to-last entry).
+2. Call:
+   ```
+   mcp__sdd-autopilot__sdd_evaluate_experiment(
+     project_path:   "{project_path}",
+     experiment_id:  "{experiment_applied}",
+     result_score:   {pipeline_score},
+     baseline_score: {previous_pipeline_score}
+   )
+   ```
+3. Handle the verdict:
+   - **`verdict="promote"`**: The experiment improved the pipeline. Create a new pattern from it:
+     ```
+     mcp__sdd-autopilot__sdd_propose_pattern(
+       project_path:    "{project_path}",
+       pattern_id:      "exp-{experiment_id}",
+       type:            "{infer from experiment.mutation -- e.g., skip_phase, model_swap}",
+       condition:       "feature_type={feature_type} complexity={complexity}",
+       action:          "{describe the mutation that was applied}",
+       confidence:      0.5,
+       supporting_runs: 1,
+       min_runs:        5,
+       ttl:             20
+     )
+     ```
+   - **`verdict="discard"`**: Log and clean up. No further action needed -- the handler already marked the experiment as `completed`.
+     ```
+     sdd_log_event(project_path, feature_id, event_type="experiment_discarded", phase="post_pipeline", agent_id="orchestrator",
+       data={ experiment_id: "{experiment_id}", result_score: {result}, baseline_score: {baseline} })
+     ```
+   - **`verdict="retry"`**: The handler reset the experiment to `status="proposed"` and incremented `retry_count`. It will be picked up in the next exploration run. Maximum 2 retries before auto-discard.
+     ```
+     sdd_log_event(project_path, feature_id, event_type="experiment_retry", phase="post_pipeline", agent_id="orchestrator",
+       data={ experiment_id: "{experiment_id}", retry_count: {retry_count} })
+     ```
+
+**Step 3 -- Promote mature candidates (sdd_promote_pattern):**
+
+Read all candidate patterns:
 ```
-after PR creation
-    │
-    ├── [PHASE 1 - ACTIVE] sdd_get_run_summary → persist summary.json + history.jsonl
-    │
-    ├── [PHASE 2 - ACTIVE] sdd_compute_score → compute pipeline_score, update summary.json
-    │
-    ├── haiku-analyst retro (existing, post-pipeline step 2)
-    │   ├── [PHASE 3 - ACTIVE] emit ExploitationPattern candidates via sdd_propose_pattern
-    │   └── [PHASE 4 - ACTIVE] propose Experiment via sdd_propose_experiment (if exploration turn — 1 in every 5 runs)
-    │
-    ├── [PHASE 3 - ACTIVE] sdd_promote_pattern → promote candidates with supporting_runs >= 5 AND confidence >= 0.7
-    │
-    ├── [PHASE 4 - ACTIVE] sdd_evaluate_experiment
-    │   └── if experiment status="running": compare result_score vs baseline_score → write verdict
-    │       ├── result_score >= baseline_score       → verdict="promote" → convert to ExploitationPattern
-    │       ├── result_score < baseline_score × 0.9  → verdict="discard" → accelerated decay
-    │       └── ambiguous                            → verdict="retry" (max 2 retries)
-    │
-    └── [PHASE 5 - ACTIVE] if (run_count % config.review_every_n == 0): spawn opus-meta-reviewer
-        └── Opus receives: last N RunSummaries + active patterns + completed experiments + trends
-            └── Outputs PipelineEvolution via sdd_propose_evolution
+result = mcp__sdd-autopilot__sdd_get_patterns(
+  project_path: "{project_path}",
+  status:       "candidate"
+)
+```
+For each candidate where `supporting_runs >= 5` AND `confidence >= 0.7`:
+```
+mcp__sdd-autopilot__sdd_promote_pattern(
+  project_path: "{project_path}",
+  pattern_id:   "{pattern.pattern_id}"
+)
+```
+The handler validates the promotion gate internally and returns `promoted: true` or `promoted: false` with a reason. Log each promotion:
+```
+sdd_log_event(project_path, feature_id, event_type="pattern_promoted", phase="post_pipeline", agent_id="orchestrator",
+  data={ pattern_id: "{pattern_id}", confidence: {confidence}, supporting_runs: {supporting_runs} })
 ```
 
-**Tracking `run_count`:** Count lines in `.sdd/analytics/history.jsonl`. Opus meta-reviewer trigger fires when `run_count % review_every_n == 0`. Default `review_every_n` = 10 (read from `.sdd/metacognition/config.json` if present, otherwise default). When triggered: spawn `opus-meta-reviewer` with the last N RunSummaries, active patterns, completed experiments, and analytics trends. The reviewer calls `sdd_propose_evolution` to persist its findings.
+**Step 4 -- Meta-review cycle (every N runs):**
+
+Count lines in `.sdd/analytics/history.jsonl` to get `run_count`. Read `review_every_n` from `.sdd/metacognition/config.json` (default: 10 if file missing).
+
+If `run_count % review_every_n == 0` AND `run_count > 0`:
+
+a. **Get analytics:**
+   ```
+   analytics = mcp__sdd-autopilot__sdd_get_analytics(
+     project_path: "{project_path}"
+   )
+   ```
+
+b. **Get recent summaries:**
+   ```
+   recent = mcp__sdd-autopilot__sdd_get_run_summary(
+     project_path: "{project_path}",
+     feature_id:   "{feature_id}",
+     last_n_runs:  10
+   )
+   ```
+
+c. **Get active patterns:**
+   ```
+   patterns = mcp__sdd-autopilot__sdd_get_patterns(
+     project_path: "{project_path}",
+     status:       "active"
+   )
+   ```
+
+d. **Launch opus-meta-reviewer** with the Agent tool. Include in its brief:
+   ```
+   ## Analytics Context (from sdd_get_analytics)
+   - Pipeline score trend: {analytics.trends.pipeline_score.direction} (derivative: {derivative})
+   - First-pass rate trend: {analytics.trends.first_pass_rate.direction}
+   - High-variance phases: {analytics.high_variance_phases}
+   - Avg fix loops by type: {analytics.avg_fix_loops_by_feature_type}
+   - Runs analyzed: {analytics.runs_analyzed}
+
+   ## Recent Run Summaries
+   {recent.summaries -- last 10}
+
+   ## Active Patterns
+   {patterns.patterns}
+
+   ## Completed Experiments
+   {from .sdd/metacognition/experiments.json, filtered to status="completed"}
+   ```
+   The reviewer calls `mcp__sdd-autopilot__sdd_propose_evolution` (max 2 proposals).
+
+e. **Process proposed evolutions (sdd_approve_evolution):**
+   Read `.sdd/metacognition/evolutions.json`, filter for `status="proposed"` entries.
+   For each proposed evolution:
+
+   - If `type="weight_adjust"` or `type="threshold_adjust"`:
+     ```
+     mcp__sdd-autopilot__sdd_approve_evolution(
+       project_path: "{project_path}",
+       evolution_id: "{evolution.evolution_id}",
+       decision:     "approve",
+       reason:       "Auto-approved: low-risk parameter tuning ({evolution.type})"
+     )
+     ```
+
+   - If `type` is structural (`phase_add`, `phase_remove`, `agent_redesign`, `contract_change`) OR `impact="high"` OR `requires_human=true`:
+     Emit signal and leave pending. Do NOT call `sdd_approve_evolution`:
+     ```
+     mcp__sdd-autopilot__sdd_append_signal(
+       project_path: "{project_path}",
+       feature_id:   "{feature_id}",
+       signal: {
+         type:    "ATTENTION_REQUIRED",
+         content: "Structural evolution proposed: {evolution_id} -- {description}. Requires human approval.",
+         source:  "orchestrator"
+       }
+     )
+     ```
+
+   **Hard rule:** The orchestrator NEVER auto-approves structural evolutions.
+
+**Step 5 -- Tick pattern TTLs (sdd_tick_patterns):**
+```
+mcp__sdd-autopilot__sdd_tick_patterns(
+  project_path: "{project_path}"
+)
+```
+This decrements TTLs using adaptive exponential decay. Patterns not recently confirmed decay faster. Patterns with `remaining_ttl < 1.0` are marked as `decayed`.
+
+**Step 6 -- Tick memory decay (sdd_tick_decay):**
+```
+mcp__sdd-autopilot__sdd_tick_decay(
+  project_path: "{project_path}"
+)
+```
+This decrements memory TTLs and prunes stale entries.
+
+### Tracking run_count
+
+Count lines in `.sdd/analytics/history.jsonl`. This value drives:
+- Exploration trigger: `run_count % 5 == 0` (Adaptive Run Start, step 5)
+- Meta-review trigger: `run_count % review_every_n == 0` (Adaptive Run Close, step 4)
+
+Default `review_every_n` = 10. Read from `.sdd/metacognition/config.json` if present, otherwise use the default.
 
 ## Example
 
@@ -388,3 +822,6 @@ This will:
 9. Run retrospective and update memory
 
 $ARGUMENTS
+
+<!-- Coverage audit: 31/39 tools scripted. 7 utility tools correctly excluded.
+     Last updated: 2026-03-07. See patches/ for design documents. -->
