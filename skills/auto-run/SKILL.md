@@ -5,7 +5,7 @@ description: >
   Zero stops, fully autonomous. Orchestrates subagents via Claude Code native agent system and MCP tools.
   Use when the user says "auto run", "autopilot", "sdd auto", "build this feature autonomously",
   or runs /sdd-auto:run.
-argument-hint: '"<feature description>" [--skip-worktree] [--skip-pr]'
+argument-hint: '"<feature description>" [--skip-worktree] [--skip-pr] [--recover <feature_id>]'
 user-invokable: true
 ---
 
@@ -520,7 +520,31 @@ Report to the user at these points:
 - **Gate result**: "Gate {phase}: {PASS/FAIL}" (if FAIL, include reason)
 - **Fix loop**: "Fix loop attempt {N}/{max}: {category}"
 - **Escalation**: Full escalation report
-- **Completion**: "Pipeline complete. PR: {url} | Score: {pipeline_score}/100" with summary of what was built
+- **Completion**: Show the observability report followed by the summary. Format:
+
+```
+═══════════════════════════════════════════════════
+ SDD PIPELINE REPORT — {feature_id}
+═══════════════════════════════════════════════════
+
+ Phase       │ Duration │ Gate │ Fix loops │ Confidence
+─────────────┼──────────┼──────┼───────────┼───────────
+ Triage      │ {dur}    │ pass │ 0         │ —
+ Specify     │ {dur}    │ pass │ {N}       │ {conf}
+ Plan        │ {dur}    │ pass │ {N}       │ {conf}
+ Tasks       │ {dur}    │ pass │ {N}       │ {conf}
+ Implement   │ {dur}    │ pass │ {N}       │ {conf}
+ Verify      │ {dur}    │ pass │ {N}       │ {conf}
+ Review      │ {dur}    │ pass │ {N}       │ {conf}
+ PR          │ {dur}    │ pass │ 0         │ —
+
+ Score: {pipeline_score}/100 | First-pass: {first_pass_rate}%
+ Bottleneck: {slowest phase} ({reason})
+ PR: {url}
+═══════════════════════════════════════════════════
+```
+
+Build this table from `metrics.jsonl` and `phase_confidence.json` in `.sdd/runs/{feature_id}/`. If a phase has no metrics (e.g. skipped by pattern), show "skip" in the Gate column
 
 ## PR phase details
 
@@ -664,6 +688,22 @@ After step 9 (sdd_memory_write), proceed to the Adaptive Run Close sequence.
 
 - `--skip-worktree`: Work directly in the project directory instead of creating a git worktree. Skips `worktree-pr start`, `finish`, and `cleanup`. pr-creator handles all git operations as before.
 - `--skip-pr`: Skip the PR creation step (useful for testing). Commits to worktree branch but does not push or open PR. Worktree cleanup is also skipped.
+- `--recover <feature_id>`: Resume an incomplete run. Detects what completed and what's missing, then executes only the remaining steps. Recovery flow:
+
+  1. Call `sdd_get_state(project_path)` and read the feature's current state.
+  2. Check `.sdd/runs/{feature_id}/` for existing artifacts:
+     - `metrics.jsonl` → which phases emitted metrics
+     - `phase_confidence.json` → which phases recorded confidence
+     - `summary.json` → whether run summary was generated
+     - `retro.json` → whether retro ran
+  3. Determine what's missing:
+     - **Missing phase metrics**: phases that completed (state progressed past them) but have no entry in `metrics.jsonl`. For each, emit metrics with `duration_ms: -1` (unknown) and `gate_result: "pass"` (inferred from state progression). Log `event_type: "metrics_recovered"`.
+     - **Missing post-pipeline**: if `summary.json` doesn't exist, execute post-pipeline steps 1-9 (run_summary, compute_score, check_thresholds, detect_anomaly, set_golden, run_retro, haiku-analyst, META_LEARNING, memory_write).
+     - **Missing Adaptive Run Close**: if retro exists but no evolutions/patterns were processed, execute the Adaptive Run Close sequence.
+  4. Show the observability report (same format as completion).
+  5. Show the Human Debrief.
+
+  Recovery is idempotent — running it twice on the same feature won't duplicate data because `sdd_emit_metrics` and `sdd_get_run_summary` check for existing entries.
 
 ## Post-pipeline iterations
 
