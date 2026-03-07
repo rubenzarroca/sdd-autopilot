@@ -271,8 +271,50 @@ export async function handleComputeScore(params: {
 
 // ─── Exploitation Patterns helpers ───────────────────────────────
 
-const readPatterns  = (p: string) => readMetacognitionJson<ExploitationPattern>(p, "patterns.json");
+const readPatternsRaw  = (p: string) => readMetacognitionJson<ExploitationPattern>(p, "patterns.json");
 const writePatterns = (p: string, data: ExploitationPattern[]) => writeMetacognitionJson(p, "patterns.json", data);
+
+// ─── Thompson Sampling (Normal approximation to Beta distribution) ──
+
+function thompsonSample(alpha: number, betaParam: number): number {
+  const mean = alpha / (alpha + betaParam);
+  const variance = (alpha * betaParam) /
+    ((alpha + betaParam) ** 2 * (alpha + betaParam + 1));
+  // Box-Muller transform: generate Z ~ N(0,1)
+  const u1 = Math.max(1e-10, Math.random()); // avoid log(0)
+  const u2 = Math.random();
+  const z = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+  const sample = mean + Math.sqrt(variance) * z;
+  return Math.max(0, Math.min(1, sample)); // clamp to [0, 1]
+}
+
+/** Migrate legacy patterns that lack alpha/beta_param or adaptive decay fields */
+function migratePatterns(patterns: ExploitationPattern[]): ExploitationPattern[] {
+  return patterns.map(p => {
+    let migrated = p;
+    if (migrated.alpha === undefined || migrated.beta_param === undefined) {
+      const alpha = (migrated.supporting_runs ?? 0) + 1;
+      const beta_param = 1;
+      migrated = { ...migrated, alpha, beta_param, confidence: alpha / (alpha + beta_param) };
+    }
+    if (migrated.last_confirmed_tick === undefined) {
+      migrated = { ...migrated, last_confirmed_tick: 0 };
+    }
+    if (migrated.total_ticks_alive === undefined) {
+      const estimated = (migrated.ttl !== undefined && migrated.min_runs)
+        ? Math.max(0, 20 - migrated.ttl) : 0;
+      migrated = { ...migrated, total_ticks_alive: estimated };
+    }
+    if (migrated.decay_rate === undefined) {
+      migrated = { ...migrated, decay_rate: 0 };
+    }
+    return migrated;
+  });
+}
+
+async function readPatterns(p: string): Promise<ExploitationPattern[]> {
+  return migratePatterns(await readPatternsRaw(p));
+}
 
 // ─── sdd_get_patterns ────────────────────────────────────────────
 
@@ -306,7 +348,14 @@ export async function handleGetPatterns(params: {
     });
   }
 
-  return { patterns: results, count: results.length };
+  // Add computed posterior_variance to each pattern
+  const enriched = results.map(p => {
+    const pv = (p.alpha * p.beta_param) /
+      ((p.alpha + p.beta_param) ** 2 * (p.alpha + p.beta_param + 1));
+    return { ...p, posterior_variance: pv };
+  });
+
+  return { patterns: enriched, count: enriched.length };
 }
 
 // ─── sdd_propose_pattern ─────────────────────────────────────────
@@ -334,7 +383,12 @@ export async function handleProposePattern(params: {
     type:            params.type,
     condition:       params.condition,
     action:          params.action,
-    confidence:      params.confidence,
+    confidence:      0.5,           // Beta(1,1) posterior mean — ignore caller value
+    alpha:           1,             // uniform prior
+    beta_param:      1,             // uniform prior
+    last_confirmed_tick: 0,
+    total_ticks_alive:   0,
+    decay_rate:          0,
     supporting_runs: params.supporting_runs,
     min_runs:        params.min_runs ?? 5,
     ttl:             params.ttl ?? 20,
@@ -370,17 +424,26 @@ export async function handlePromotePattern(params: {
     return { promoted: false, reason: "Cannot promote a decayed pattern. Propose a new one." };
   }
 
+  // Bayesian stats (computed for every response)
+  const { alpha, beta_param } = pattern;
+  const posterior_mean = alpha / (alpha + beta_param);
+  const posterior_variance = (alpha * beta_param) /
+    ((alpha + beta_param) ** 2 * (alpha + beta_param + 1));
+  const bayesian_stats = { alpha, beta_param, posterior_mean, posterior_variance };
+
   // Promotion gate: supporting_runs >= min_runs AND confidence >= 0.7
   if (pattern.supporting_runs < pattern.min_runs) {
     return {
       promoted: false,
       reason: `Insufficient supporting_runs: ${pattern.supporting_runs} < min_runs (${pattern.min_runs})`,
+      bayesian_stats,
     };
   }
   if (pattern.confidence < 0.7) {
     return {
       promoted: false,
       reason: `Insufficient confidence: ${pattern.confidence} < 0.7`,
+      bayesian_stats,
     };
   }
 
@@ -389,7 +452,7 @@ export async function handlePromotePattern(params: {
   all[idx] = pattern;
   await writePatterns(params.project_path, all);
 
-  return { promoted: true, pattern_id: pattern.pattern_id, status: "active" };
+  return { promoted: true, pattern_id: pattern.pattern_id, status: "active", bayesian_stats };
 }
 
 // ─── sdd_tick_decay extension: decay patterns ────────────────────
@@ -558,25 +621,66 @@ export async function handleProposeEvolution(params: {
   };
 }
 
-// ─── sdd_tick_patterns (Phase 3) ────────────────────────────────
+// ─── sdd_tick_patterns (Phase 3) — Adaptive exponential decay ───
 export async function handleTickPatterns(params: {
   project_path: string;
 }): Promise<unknown> {
   const all = await readPatterns(params.project_path);
   let decayed = 0;
+  const INITIAL_TTL = 20; // default from propose_pattern
+  const details: Array<{
+    pattern_id: string;
+    decay_rate: number;
+    remaining_ttl: number;
+    ticks_since_confirmation: number;
+    status: string;
+  }> = [];
 
   const updated = all.map(p => {
     if (p.status !== "active" && p.status !== "candidate") return p;
-    const newTtl = p.ttl - 1;
-    if (newTtl <= 0) {
+
+    const totalTicksAlive = p.total_ticks_alive + 1;
+    const ticksSinceConfirmation = totalTicksAlive - p.last_confirmed_tick;
+    const decayRate = ticksSinceConfirmation / Math.max(totalTicksAlive, 1);
+    const remainingTtl = INITIAL_TTL * Math.exp(-decayRate * ticksSinceConfirmation);
+
+    if (remainingTtl < 1.0) {
       decayed++;
-      return { ...p, ttl: 0, status: "decayed" as const, decayed_at: new Date().toISOString() };
+      details.push({
+        pattern_id: p.pattern_id,
+        decay_rate: Math.round(decayRate * 1000) / 1000,
+        remaining_ttl: Math.round(remainingTtl * 1000) / 1000,
+        ticks_since_confirmation: ticksSinceConfirmation,
+        status: "decayed",
+      });
+      return {
+        ...p,
+        ttl: 0,
+        total_ticks_alive: totalTicksAlive,
+        decay_rate: decayRate,
+        status: "decayed" as const,
+        decayed_at: new Date().toISOString(),
+      };
     }
-    return { ...p, ttl: newTtl };
+
+    const newTtl = Math.round(remainingTtl);
+    details.push({
+      pattern_id: p.pattern_id,
+      decay_rate: Math.round(decayRate * 1000) / 1000,
+      remaining_ttl: Math.round(remainingTtl * 1000) / 1000,
+      ticks_since_confirmation: ticksSinceConfirmation,
+      status: p.status,
+    });
+    return {
+      ...p,
+      ttl: newTtl,
+      total_ticks_alive: totalTicksAlive,
+      decay_rate: decayRate,
+    };
   });
 
   await writePatterns(params.project_path, updated);
-  return { ticked: true, decayed };
+  return { ticked: true, decayed, details };
 }
 
 // ─── sdd_approve_evolution (Phase 5) ────────────────────────────
@@ -697,6 +801,7 @@ export async function handleUpdatePattern(params: {
   pattern_id:   string;
   increment?:   number;
   confidence?:  number;
+  outcome?:     "success" | "failure";
 }): Promise<unknown> {
   const all = await readPatterns(params.project_path);
   const idx = all.findIndex(p => p.pattern_id === params.pattern_id);
@@ -714,7 +819,17 @@ export async function handleUpdatePattern(params: {
   const inc = params.increment ?? 1;
   pattern.supporting_runs += inc;
 
-  if (params.confidence !== undefined) {
+  if (params.outcome !== undefined) {
+    // Bayesian update: outcome takes precedence over explicit confidence
+    if (params.outcome === "success") {
+      pattern.alpha += 1;
+      pattern.last_confirmed_tick = pattern.total_ticks_alive;
+    } else {
+      pattern.beta_param += 1;
+    }
+    pattern.confidence = pattern.alpha / (pattern.alpha + pattern.beta_param);
+  } else if (params.confidence !== undefined) {
+    // Escape hatch: explicit confidence override (backward compat)
     if (params.confidence < 0 || params.confidence > 1) {
       return { error: `Confidence must be between 0 and 1, got ${params.confidence}` };
     }
@@ -729,6 +844,8 @@ export async function handleUpdatePattern(params: {
     pattern_id: pattern.pattern_id,
     supporting_runs: pattern.supporting_runs,
     confidence: pattern.confidence,
+    alpha: pattern.alpha,
+    beta_param: pattern.beta_param,
     status: pattern.status,
   };
 }
@@ -766,21 +883,40 @@ export async function handleGetStrategy(params: {
     try { currentWeights = JSON.parse(await readFile(weightsPath, "utf-8")); } catch { /* missing */ }
   }
 
-  // Build recommendations from applicable patterns
-  const recommendations: string[] = [];
-  for (const p of applicable) {
-    recommendations.push(
-      `Pattern "${p.pattern_id}" (confidence: ${p.confidence}, runs: ${p.supporting_runs}): ${p.action}`,
-    );
+  // Thompson Sampling: exploit vs explore decision
+  let exploit_score = 0;
+  let explore_score = 0;
+  const pattern_samples: Array<{ pattern_id: string; sample: number }> = [];
+
+  if (applicable.length > 0) {
+    for (const p of applicable) {
+      const sample = thompsonSample(p.alpha, p.beta_param);
+      pattern_samples.push({ pattern_id: p.pattern_id, sample: Math.round(sample * 1000) / 1000 });
+    }
+    exploit_score = pattern_samples.reduce((s, ps) => s + ps.sample, 0) / pattern_samples.length;
   }
-  if (activeExperiments.length > 0) {
-    for (const e of activeExperiments) {
-      recommendations.push(
-        `Experiment "${e.experiment_id}" (${e.status}): ${e.hypothesis}. Mutation: ${JSON.stringify(e.mutation)}`,
-      );
+
+  const proposedExperiment = activeExperiments.find(e => e.status === "proposed");
+  if (proposedExperiment) {
+    explore_score = thompsonSample(1, 1); // Uniform prior for unknown experiment
+  }
+
+  let decision: "exploit" | "explore";
+  if (applicable.length === 0 && proposedExperiment) decision = "explore";
+  else if (!proposedExperiment) decision = "exploit";
+  else decision = explore_score > exploit_score ? "explore" : "exploit";
+
+  // Build recommendations based on decision
+  const recommendations: string[] = [];
+  if (decision === "exploit" && applicable.length > 0) {
+    for (const p of applicable) {
+      recommendations.push(`[EXPLOIT] Pattern "${p.pattern_id}" (confidence: ${p.confidence.toFixed(3)}): ${p.action}`);
     }
   }
-  if (applicable.length === 0 && activeExperiments.length === 0) {
+  if (decision === "explore" && proposedExperiment) {
+    recommendations.push(`[EXPLORE] Experiment "${proposedExperiment.experiment_id}": ${proposedExperiment.hypothesis}`);
+  }
+  if (applicable.length === 0 && !proposedExperiment) {
     recommendations.push("No active patterns or experiments apply. Run standard pipeline.");
   }
 
@@ -791,6 +927,13 @@ export async function handleGetStrategy(params: {
     active_experiments: activeExperiments,
     current_weights: currentWeights,
     recommendations,
+    exploration_decision: {
+      exploit_score: Math.round(exploit_score * 1000) / 1000,
+      explore_score: Math.round(explore_score * 1000) / 1000,
+      decision,
+      method: "thompson_sampling",
+      pattern_samples,
+    },
   };
 }
 

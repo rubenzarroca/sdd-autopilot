@@ -709,8 +709,66 @@ export async function handleTickDecay(params: {
   project_path: string;
 }): Promise<unknown> {
   const mm = new MemoryManager(params.project_path);
+  const { existsSync, readFileSync: readSync, writeFileSync: writeSync } = await import("node:fs");
 
-  const removedPatterns = mm.tickPatternTTLs();
+  // Adaptive exponential decay for learned patterns (replaces mm.tickPatternTTLs())
+  let removedPatterns = 0;
+  const INITIAL_TTL = 20;
+
+  if (existsSync(mm.projectMemoryPath)) {
+    const content = readSync(mm.projectMemoryPath, "utf-8");
+    const section = mm.extractSection(content, "Learned Patterns");
+
+    if (section && !section.startsWith("(no patterns")) {
+      const blocks = section.split("\n\n").filter(b => b.trim());
+
+      const updated = blocks.map(block => {
+        // Extended format: <!-- PATTERN-NNN: added_run=X, ttl=Y, ticks_alive=Z, last_confirmed=W -->
+        // Legacy format:  <!-- PATTERN-NNN: added_run=X, ttl=Y -->
+        const m = block.match(/<!-- PATTERN-\d+: added_run=\d+, ttl=(\d+)(?:, ticks_alive=(\d+), last_confirmed=(\d+))? -->/);
+        if (!m) return block; // date-only format: no decay, keep forever
+
+        const ticksAlive = (m[2] !== undefined ? parseInt(m[2]) : 0) + 1;
+        const lastConfirmed = m[3] !== undefined ? parseInt(m[3]) : 0;
+        const ticksSinceConfirmation = ticksAlive - lastConfirmed;
+        const decayRate = ticksSinceConfirmation / Math.max(ticksAlive, 1);
+        const remainingTtl = INITIAL_TTL * Math.exp(-decayRate * ticksSinceConfirmation);
+
+        if (remainingTtl < 1.0) {
+          removedPatterns++;
+          return null; // expire
+        }
+
+        const newTtl = Math.round(remainingTtl);
+        // Update comment with new values
+        return block.replace(
+          /<!-- PATTERN-(\d+): added_run=(\d+), ttl=\d+(?:, ticks_alive=\d+, last_confirmed=\d+)? -->/,
+          `<!-- PATTERN-$1: added_run=$2, ttl=${newTtl}, ticks_alive=${ticksAlive}, last_confirmed=${lastConfirmed} -->`,
+        );
+      }).filter((b): b is string => b !== null);
+
+      if (removedPatterns > 0 || blocks.length > 0) {
+        // Re-number surviving patterns
+        let idx = 1;
+        const renumbered = updated.map(block =>
+          block.replace(/<!-- PATTERN-\d+:/, `<!-- PATTERN-${String(idx++).padStart(3, "0")}:`),
+        ).join("\n\n");
+        const newBody = renumbered.trim() || "(no patterns learned yet)";
+        const headerRegex = new RegExp(`^## Learned Patterns\\s*$`, "m");
+        const headerMatch = headerRegex.exec(content);
+        if (headerMatch) {
+          const startIdx = headerMatch.index + headerMatch[0].length;
+          const rest = content.slice(startIdx);
+          const nextHeader = /^## /m.exec(rest);
+          const before = content.slice(0, startIdx);
+          const after = nextHeader ? rest.slice(nextHeader.index) : "";
+          writeSync(mm.projectMemoryPath, before + "\n" + newBody + "\n\n" + after, "utf-8");
+        }
+      }
+    }
+  }
+
+  // Exploration TTLs: keep using MemoryManager (linear decay is fine for explorations)
   const expiredExplorations = mm.tickExplorationTTLs();
 
   return {

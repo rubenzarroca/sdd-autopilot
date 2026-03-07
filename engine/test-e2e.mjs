@@ -41,6 +41,7 @@ import {
   handleProposeExperiment,
   handleEvaluateExperiment,
   handleProposeEvolution,
+  handleUpdatePattern,
 } from "./build/metacognition.js";
 
 let passed = 0;
@@ -743,7 +744,7 @@ assert("get_analytics returns avg_fix_loops_by_feature_type", typeof h.avg_fix_l
 assert("get_analytics api feature_type present", h.avg_fix_loops_by_feature_type["api"] !== undefined);
 assert("get_analytics first_pass_rate_history 0-100", h.first_pass_rate_history >= 0 && h.first_pass_rate_history <= 100);
 assert("get_analytics high_variance_phases is array", Array.isArray(h.high_variance_phases));
-assert("get_analytics trends is array", Array.isArray(h.trends));
+assert("get_analytics trends is object or null (depends on run count)", h.trends === null || (typeof h.trends === "object" && !Array.isArray(h.trends)));
 
 // filter by feature_type=api (should return results)
 h = await handleGetAnalytics({ project_path: projectPath, feature_type: "api" });
@@ -761,11 +762,11 @@ assert("get_analytics filter complexity=low returns runs", h.runs_analyzed >= 1)
 // no history file → returns empty result
 h = await handleGetAnalytics({ project_path: "/tmp/nonexistent-analytics-path" });
 assert("get_analytics missing history returns 0 runs", h.runs_analyzed === 0);
-assert("get_analytics missing history returns empty trends", h.trends.length === 0);
+assert("get_analytics missing history returns null trends", h.trends === null);
 
 // trends: only computed with >= 4 runs; with 2 runs, trends should be empty
 h = await handleGetAnalytics({ project_path: projectPath });
-assert("get_analytics trends empty when < 4 runs", h.runs_analyzed < 4 ? h.trends.length === 0 : true);
+assert("get_analytics trends null when < 4 runs", h.runs_analyzed < 4 ? h.trends === null : true);
 
 // ── Test 16: sdd_compute_score ────────────────────────────────────
 console.log("\n=== Test 16: sdd_compute_score ===");
@@ -972,7 +973,8 @@ h = await handleProposePattern({
 });
 assert("propose_pattern duplicate id returns error", typeof h.error === "string");
 
-// Second pattern
+// Second pattern — Bayesian: confidence starts at 0.5 (Beta(1,1) prior)
+// Build up confidence via outcome="success" updates to pass promote gate (>= 0.7)
 h = await handleProposePattern({
   project_path:    projectPath,
   pattern_id:      "haiku-triage-all",
@@ -980,12 +982,16 @@ h = await handleProposePattern({
   condition:       "complexity=low",
   action:          "swap model=haiku phase=triage",
   confidence:      0.75,
-  supporting_runs: 6,
+  supporting_runs: 1,
   min_runs:        5,
 });
 assert("propose_pattern second pattern created", h.proposed === true);
+// 5 success updates: alpha=6, beta=1, confidence=6/7≈0.857, supporting_runs=6
+for (let i = 0; i < 5; i++) {
+  await handleUpdatePattern({ project_path: projectPath, pattern_id: "haiku-triage-all", outcome: "success" });
+}
 
-// Third pattern: high confidence, supporting_runs=5 (exactly at threshold)
+// Third pattern: build to exactly at threshold via Bayesian updates
 h = await handleProposePattern({
   project_path:    projectPath,
   pattern_id:      "skip-spec-test-api",
@@ -993,10 +999,14 @@ h = await handleProposePattern({
   condition:       "feature_type=api",
   action:          "skip phase=spec-test",
   confidence:      0.72,
-  supporting_runs: 5,
+  supporting_runs: 1,
   min_runs:        5,
 });
 assert("propose_pattern third pattern created", h.proposed === true);
+// 4 success updates: alpha=5, beta=1, confidence=5/6≈0.833, supporting_runs=5
+for (let i = 0; i < 4; i++) {
+  await handleUpdatePattern({ project_path: projectPath, pattern_id: "skip-spec-test-api", outcome: "success" });
+}
 
 // ── Test 18: sdd_promote_pattern ──────────────────────────────────
 console.log("\n=== Test 18: sdd_promote_pattern ===");
@@ -1006,9 +1016,9 @@ h = await handlePromotePattern({ project_path: projectPath, pattern_id: "skip-pl
 assert("promote_pattern rejected: supporting_runs=3 < min_runs=5", h.promoted === false);
 assert("promote_pattern rejection reason mentions supporting_runs", h.reason.includes("supporting_runs"));
 
-// Promote with supporting_runs=6, confidence=0.75 (>= both thresholds): should succeed
+// Promote with supporting_runs=6, confidence≈0.857 (>= both thresholds): should succeed
 h = await handlePromotePattern({ project_path: projectPath, pattern_id: "haiku-triage-all" });
-assert("promote_pattern succeeds: supporting_runs=6, confidence=0.75", h.promoted === true);
+assert("promote_pattern succeeds: supporting_runs=6, confidence>=0.7", h.promoted === true);
 assert("promote_pattern status=active", h.status === "active");
 
 // Verify in patterns.json
@@ -1022,9 +1032,9 @@ h = await handlePromotePattern({ project_path: projectPath, pattern_id: "haiku-t
 assert("promote_pattern already-active returns promoted=false", h.promoted === false);
 assert("promote_pattern already-active reason", h.reason.includes("already active"));
 
-// Promote with exactly min_runs=5 and confidence=0.72 (>= 0.7): should succeed
+// Promote with supporting_runs=5 and confidence≈0.833 (>= 0.7): should succeed
 h = await handlePromotePattern({ project_path: projectPath, pattern_id: "skip-spec-test-api" });
-assert("promote_pattern succeeds at exact threshold (runs=5, conf=0.72)", h.promoted === true);
+assert("promote_pattern succeeds at exact threshold (runs=5, conf>=0.7)", h.promoted === true);
 
 // Nonexistent pattern
 h = await handlePromotePattern({ project_path: projectPath, pattern_id: "nonexistent-pattern" });
@@ -1071,12 +1081,16 @@ assert("get_patterns nonexistent returns empty", h.count === 0 && h.patterns.len
 // ── Test 20: sdd_tick_patterns ─────────────────────────────────────
 console.log("\n=== Test 20: sdd_tick_patterns ===");
 
-// Add a pattern with TTL=1 so it decays after one tick
+// Add a candidate pattern and build confidence via Bayesian updates before promoting
 await handleProposePattern({
   project_path: projectPath, pattern_id: "soon-to-decay",
   type: "prompt_tuning", condition: "complexity=high", action: "inject context",
-  confidence: 0.8, supporting_runs: 6, min_runs: 5, ttl: 1,
+  confidence: 0.8, supporting_runs: 1, min_runs: 5, ttl: 1,
 });
+// Build confidence: 5 successes → alpha=6, beta=1, confidence≈0.857, supporting_runs=6
+for (let i = 0; i < 5; i++) {
+  await handleUpdatePattern({ project_path: projectPath, pattern_id: "soon-to-decay", outcome: "success" });
+}
 await handlePromotePattern({ project_path: projectPath, pattern_id: "soon-to-decay" });
 
 // Verify it's active before tick
@@ -1084,9 +1098,19 @@ let patternsBefore = JSON.parse(readFileSync(patternsPath, "utf-8"));
 const beforeDecay = patternsBefore.find(p => p.pattern_id === "soon-to-decay");
 assert("tick_patterns: soon-to-decay is active before tick", beforeDecay?.status === "active");
 
-h = await handleTickPatterns({ project_path: projectPath });
+// With adaptive exponential decay: remaining_ttl = 20 * exp(-lambda * ticks_since_confirmation)
+// After 1 tick with no confirmations: total_ticks_alive=1, last_confirmed=0, lambda=1/1=1,
+// remaining = 20 * exp(-1) ≈ 7.36 → still alive. Need 3 ticks to decay (20*exp(-3)≈0.99 < 1.0).
+// Confirm haiku-triage-all between ticks so it survives (resets ticks_since_confirmation).
+let totalDecayed = 0;
+for (let i = 0; i < 3; i++) {
+  h = await handleTickPatterns({ project_path: projectPath });
+  totalDecayed += h.decayed;
+  // Confirm haiku-triage-all after each tick to keep it alive
+  await handleUpdatePattern({ project_path: projectPath, pattern_id: "haiku-triage-all", outcome: "success" });
+}
 assert("tick_patterns returns ticked:true", h.ticked === true);
-assert("tick_patterns decayed=1 (soon-to-decay TTL was 1)", h.decayed === 1);
+assert("tick_patterns: soon-to-decay decayed after multiple ticks", totalDecayed >= 1);
 
 // Verify decay in file
 const patternsAfter = JSON.parse(readFileSync(patternsPath, "utf-8"));
@@ -1094,9 +1118,9 @@ const afterDecay = patternsAfter.find(p => p.pattern_id === "soon-to-decay");
 assert("tick_patterns: soon-to-decay is now decayed", afterDecay?.status === "decayed");
 assert("tick_patterns: soon-to-decay has decayed_at", typeof afterDecay?.decayed_at === "string");
 
-// Other patterns: TTL decremented but not expired
+// Other patterns: TTL decreased via adaptive decay but survived (confirmed between ticks)
 const otherPattern = patternsAfter.find(p => p.pattern_id === "haiku-triage-all");
-assert("tick_patterns: haiku-triage-all TTL decremented to 19", otherPattern?.ttl === 19);
+assert("tick_patterns: haiku-triage-all TTL decreased", otherPattern?.ttl < 20);
 assert("tick_patterns: haiku-triage-all still active", otherPattern?.status === "active");
 
 // Decayed pattern cannot be promoted

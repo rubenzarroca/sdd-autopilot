@@ -3,14 +3,31 @@
 // All deterministic — no LLM calls.
 
 import { readFile, writeFile, mkdir, appendFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-import type { PhaseMetrics, RunSummary, AnalyticsResult, AnalyticsTrend } from "./types.js";
+import type { PhaseMetrics, RunSummary } from "./types.js";
 import { fileExists, parseJsonl } from "./utils.js";
 import { StateManager } from "./state.js";
+
+// Fix loop caps from contracts.json — used by threshold checks
+const FIX_LOOP_CAPS: Record<string, number> = (() => {
+  try {
+    const contractsPath = resolve(__dirname, "contracts.json");
+    const contracts = JSON.parse(readFileSync(contractsPath, "utf-8"));
+    const caps: Record<string, number> = {};
+    for (const [phase, config] of Object.entries(contracts.contracts)) {
+      const fl = (config as Record<string, unknown>).fix_loop as { max_attempts: number } | undefined;
+      if (fl?.max_attempts) caps[phase] = fl.max_attempts;
+    }
+    return caps;
+  } catch {
+    return { verify: 3, review: 2 }; // fallback
+  }
+})();
 
 // ─── sdd_emit_metrics ────────────────────────────────────────────
 
@@ -85,6 +102,24 @@ export async function handleGetRunSummary(params: {
   if (phases_executed.includes("pr")) outcome = "pr_created";
   else if (phases_executed.some(p => p === "escalated")) outcome = "escalated";
 
+  // Read phase confidence data
+  const confPath = resolve(params.project_path, ".sdd", "runs", params.feature_id, "phase_confidence.json");
+  let avg_confidence: number | null = null;
+  if (await fileExists(confPath)) {
+    try {
+      const confEntries: Array<{ feature_id: string; confidence: number }> =
+        JSON.parse(await readFile(confPath, "utf-8"));
+      const featureConfs = confEntries
+        .filter(e => e.feature_id === params.feature_id)
+        .map(e => e.confidence);
+      if (featureConfs.length > 0) {
+        avg_confidence = Math.round(
+          featureConfs.reduce((s, c) => s + c, 0) / featureConfs.length * 1000
+        ) / 1000;
+      }
+    } catch { /* malformed file — leave null */ }
+  }
+
   const first = metrics[0];
   const summary: RunSummary = {
     run_id:          params.run_id ?? first.run_id,
@@ -102,6 +137,7 @@ export async function handleGetRunSummary(params: {
     review_decision: null,   // set by orchestrator from review agent structured output
     first_pass_rate,
     pipeline_score:  null,   // computed by sdd_compute_score (Phase 2)
+    avg_confidence,
     phase_metrics:   metrics,
   };
 
@@ -118,6 +154,29 @@ export async function handleGetRunSummary(params: {
   return summary;
 }
 
+// ─── EMA (Exponential Moving Average) ─────────────────────────────
+
+function computeEMA(values: number[], alpha: number): { ema: number[]; derivative: number[] } {
+  const ema: number[] = [values[0]];
+  const derivative: number[] = [0];
+  for (let i = 1; i < values.length; i++) {
+    const current = alpha * values[i] + (1 - alpha) * ema[i - 1];
+    ema.push(current);
+    derivative.push(current - ema[i - 1]);
+  }
+  return { ema, derivative };
+}
+
+function emaDirection(derivative: number[]): string {
+  if (derivative.length < 2) return "stable";
+  const last = derivative[derivative.length - 1];
+  const prev = derivative[derivative.length - 2];
+  if (Math.abs(last) < 0.01) return "stable";
+  if (last < 0) return "degrading";
+  if (last > prev) return "accelerating";
+  return "decelerating";
+}
+
 // ─── sdd_get_analytics ───────────────────────────────────────────
 
 export async function handleGetAnalytics(params: {
@@ -126,8 +185,11 @@ export async function handleGetAnalytics(params: {
   complexity?:   string;
   date_from?:    string;
   date_to?:      string;
+  ema_alpha?:    number;
 }): Promise<unknown> {
-  const empty: AnalyticsResult = {
+  const alpha = params.ema_alpha ?? 0.3;
+
+  const empty = {
     filter: {
       feature_type: params.feature_type,
       complexity:   params.complexity,
@@ -139,7 +201,7 @@ export async function handleGetAnalytics(params: {
     avg_fix_loops_by_feature_type:  {},
     first_pass_rate_history:        0,
     high_variance_phases:           [],
-    trends:                         [],
+    trends:                         null as unknown,
   };
 
   const historyPath = resolve(params.project_path, ".sdd", "analytics", "history.jsonl");
@@ -192,41 +254,37 @@ export async function handleGetAnalytics(params: {
     if (stddev > mean * 0.5) high_variance_phases.push(phase);
   }
 
-  // trends: compare first half vs second half (requires >= 4 runs for statistical meaning)
-  const trends: AnalyticsTrend[] = [];
+  // trends: EMA-based trend analysis (requires >= 4 runs)
+  let trends: Record<string, unknown> | null = null;
   if (summaries.length >= 4) {
-    const mid = Math.floor(summaries.length / 2);
-    const a = summaries.slice(0, mid);
-    const b = summaries.slice(mid);
-    const mean = <T>(arr: T[], fn: (x: T) => number): number =>
-      arr.reduce((s, x) => s + fn(x), 0) / arr.length;
+    const buildTrend = (values: number[]) => {
+      if (values.length < 4) return null;
+      const { ema, derivative } = computeEMA(values, alpha);
+      return {
+        current_ema: Math.round(ema[ema.length - 1] * 1000) / 1000,
+        derivative: Math.round(derivative[derivative.length - 1] * 1000) / 1000,
+        direction: emaDirection(derivative),
+        raw_ema: ema.map(v => Math.round(v * 1000) / 1000),
+      };
+    };
 
-    const fpr_a = mean(a, s => s.first_pass_rate);
-    const fpr_b = mean(b, s => s.first_pass_rate);
-    trends.push({
-      metric: "first_pass_rate",
-      direction: fpr_b > fpr_a + 5 ? "improving" : fpr_b < fpr_a - 5 ? "regressing" : "stable",
-      data_points: summaries.length,
-    });
+    // Non-nullable metrics
+    const fprValues = summaries.map(s => s.first_pass_rate);
+    const durValues = summaries.map(s => s.total_duration_ms);
 
-    const fl_a = mean(a, s => s.total_fix_loops);
-    const fl_b = mean(b, s => s.total_fix_loops);
-    trends.push({
-      metric: "fix_loops",
-      direction: fl_b < fl_a * 0.9 ? "improving" : fl_b > fl_a * 1.1 ? "regressing" : "stable",
-      data_points: summaries.length,
-    });
+    // Nullable metrics — only include runs where value is not null
+    const pipelineValues = summaries.filter(s => s.pipeline_score !== null).map(s => s.pipeline_score!);
+    const confValues = summaries.filter(s => s.avg_confidence !== null).map(s => s.avg_confidence!);
 
-    const dur_a = mean(a, s => s.total_duration_ms);
-    const dur_b = mean(b, s => s.total_duration_ms);
-    trends.push({
-      metric: "duration",
-      direction: dur_b < dur_a * 0.9 ? "improving" : dur_b > dur_a * 1.1 ? "regressing" : "stable",
-      data_points: summaries.length,
-    });
+    trends = {
+      pipeline_score:    buildTrend(pipelineValues),
+      first_pass_rate:   buildTrend(fprValues),
+      total_duration_ms: buildTrend(durValues),
+      avg_confidence:    buildTrend(confValues),
+    };
   }
 
-  const result: AnalyticsResult = {
+  return {
     filter: {
       feature_type: params.feature_type,
       complexity:   params.complexity,
@@ -240,7 +298,6 @@ export async function handleGetAnalytics(params: {
     high_variance_phases,
     trends,
   };
-  return result;
 }
 
 // ─── sdd_check_thresholds ─────────────────────────────────────────
@@ -259,6 +316,8 @@ const DEFAULT_THRESHOLDS = {
   max_duration_ratio: 2.0,
   min_first_pass_rate: 50,
   max_total_duration_minutes: 60,
+  min_avg_confidence_warning: 0.5,
+  min_avg_confidence_critical: 0.3,
 };
 
 export async function handleCheckThresholds(params: {
@@ -303,8 +362,32 @@ export async function handleCheckThresholds(params: {
 
   // Per-phase checks
   for (const m of metrics) {
-    // Fix loops threshold
-    if (m.fix_loop_count > t.max_fix_loops_per_phase) {
+    // Fix loops threshold — relative to phase max_attempts from contracts.json
+    const phaseCap = FIX_LOOP_CAPS[m.phase];
+    if (phaseCap !== undefined && m.fix_loop_count > 0) {
+      const warningThreshold = Math.max(1, Math.ceil(phaseCap * 0.67));
+      const criticalThreshold = phaseCap;
+      if (m.fix_loop_count >= criticalThreshold) {
+        alerts.push({
+          level: "critical",
+          metric: "fix_loop_count",
+          phase: m.phase,
+          current_value: m.fix_loop_count,
+          threshold: criticalThreshold,
+          message: `Phase "${m.phase}" exhausted all fix loop attempts: ${m.fix_loop_count}/${phaseCap}`,
+        });
+      } else if (m.fix_loop_count >= warningThreshold) {
+        alerts.push({
+          level: "warning",
+          metric: "fix_loop_count",
+          phase: m.phase,
+          current_value: m.fix_loop_count,
+          threshold: warningThreshold,
+          message: `Phase "${m.phase}" used ${m.fix_loop_count}/${phaseCap} fix loop attempts`,
+        });
+      }
+    } else if (phaseCap === undefined && m.fix_loop_count > t.max_fix_loops_per_phase) {
+      // Fallback for phases not in contracts.json (use flat threshold)
       const level = m.fix_loop_count > t.max_fix_loops_per_phase * 2 ? "critical" : "warning";
       alerts.push({
         level,
@@ -360,6 +443,38 @@ export async function handleCheckThresholds(params: {
       threshold: t.max_total_duration_minutes,
       message: `Total duration is ${totalDurationMin.toFixed(1)} min (threshold: ${t.max_total_duration_minutes} min)`,
     });
+  }
+
+  // Avg confidence check (from phase_confidence.json)
+  const confPath = resolve(params.project_path, ".sdd", "runs", params.feature_id, "phase_confidence.json");
+  if (await fileExists(confPath)) {
+    try {
+      const confEntries: Array<{ feature_id: string; confidence: number }> =
+        JSON.parse(await readFile(confPath, "utf-8"));
+      const featureConfs = confEntries
+        .filter(e => e.feature_id === params.feature_id)
+        .map(e => e.confidence);
+      if (featureConfs.length > 0) {
+        const avgConf = featureConfs.reduce((s, c) => s + c, 0) / featureConfs.length;
+        if (avgConf < t.min_avg_confidence_critical) {
+          alerts.push({
+            level: "critical",
+            metric: "avg_confidence",
+            current_value: Math.round(avgConf * 1000) / 1000,
+            threshold: t.min_avg_confidence_critical,
+            message: `Average confidence is ${avgConf.toFixed(3)} (critical threshold: ${t.min_avg_confidence_critical})`,
+          });
+        } else if (avgConf < t.min_avg_confidence_warning) {
+          alerts.push({
+            level: "warning",
+            metric: "avg_confidence",
+            current_value: Math.round(avgConf * 1000) / 1000,
+            threshold: t.min_avg_confidence_warning,
+            message: `Average confidence is ${avgConf.toFixed(3)} (warning threshold: ${t.min_avg_confidence_warning})`,
+          });
+        }
+      }
+    } catch { /* malformed file — skip confidence check */ }
   }
 
   return { alerts, checked_at: new Date().toISOString() };
@@ -632,13 +747,21 @@ export async function handleDetectAnomaly(params: {
 
   const metricsToCheck: Array<{ name: string; currentVal: number; historicalVals: number[] }> = [
     { name: "total_duration_ms", currentVal: current.total_duration_ms, historicalVals: historical.map(s => s.total_duration_ms) },
-    { name: "total_fix_loops",   currentVal: current.total_fix_loops,   historicalVals: historical.map(s => s.total_fix_loops) },
     { name: "first_pass_rate",   currentVal: current.first_pass_rate,   historicalVals: historical.map(s => s.first_pass_rate) },
+  ];
+  const excludedMetrics = [
+    { metric: "total_fix_loops", reason: "Capped at 5 by pipeline fix loop limits (verify: 3, review: 2). Z-score not meaningful on bounded discrete range." },
   ];
   if (current.pipeline_score !== null) {
     const historicalScores = historical.filter(s => s.pipeline_score !== null).map(s => s.pipeline_score!);
     if (historicalScores.length >= 5) {
       metricsToCheck.push({ name: "pipeline_score", currentVal: current.pipeline_score, historicalVals: historicalScores });
+    }
+  }
+  if (current.avg_confidence !== null) {
+    const historicalConf = historical.filter(s => s.avg_confidence != null).map(s => s.avg_confidence!);
+    if (historicalConf.length >= 3) {
+      metricsToCheck.push({ name: "avg_confidence", currentVal: current.avg_confidence, historicalVals: historicalConf });
     }
   }
 
@@ -674,6 +797,7 @@ export async function handleDetectAnomaly(params: {
     status: "analyzed",
     sensitivity,
     anomalies,
+    excluded_metrics: excludedMetrics,
     run_percentile: runPercentile,
   };
 }

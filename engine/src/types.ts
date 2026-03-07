@@ -414,6 +414,9 @@ export interface RunSummary {
   // Composite Score (computed by sdd_compute_score, Phase 2)
   pipeline_score:     number | null;
 
+  // Average phase confidence (computed from phase_confidence.json)
+  avg_confidence:     number | null;
+
   // Phase detail
   phase_metrics:      PhaseMetrics[];
 }
@@ -511,7 +514,12 @@ export interface ExploitationPattern {
   type:             "skip_phase" | "reorder" | "model_swap" | "prompt_tuning" | "gate_adjust";
   condition:        string;      // match expression, e.g. "feature_type=api AND complexity=low"
   action:           string;      // what to do, e.g. "skip phase=plan"
-  confidence:       number;      // 0–1; must be >= 0.7 to promote
+  confidence:       number;      // 0–1; derived from Beta posterior mean α/(α+β)
+  alpha:            number;      // Bayesian prior + successes (default 1)
+  beta_param:       number;      // Bayesian prior + failures (default 1, named to avoid reserved word collision)
+  last_confirmed_tick: number;   // tick at which last confirmed (default 0)
+  total_ticks_alive:   number;   // total ticks since creation (default 0)
+  decay_rate:          number;   // adaptive decay lambda, computed dynamically
   supporting_runs:  number;      // runs that support this pattern; must be >= min_runs to promote
   min_runs:         number;      // promotion threshold (default 5)
   ttl:              number;      // decrements remaining before expiry
