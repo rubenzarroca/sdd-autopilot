@@ -583,7 +583,9 @@ If `--skip-pr` is set: skip step 2b (push + PR creation) but still commit in the
 
 ## Post-pipeline
 
-After PR creation succeeds:
+**ALWAYS run post-pipeline steps regardless of pipeline outcome** (success, failure, escalation, or any terminal state). The retro is especially valuable when things fail — it captures what went wrong and why. If the pipeline was interrupted or escalated, run whatever steps are possible with the available data.
+
+After PR creation (or after pipeline termination if it did not reach PR):
 1. Call `mcp__sdd-autopilot__sdd_get_run_summary` with `project_path`, `feature_id`, and the `run_id` from step 2. This aggregates all PhaseMetrics into a RunSummary, persists `summary.json`, and appends to `analytics/history.jsonl`. After the call, patch `review_decision` in `summary.json` using the review agent's structured output (`APPROVE` → `"approve"`, `REQUEST_CHANGES` → `"request_changes"`).
 2. Call `mcp__sdd-autopilot__sdd_compute_score` with `project_path` and `feature_id`. This reads the patched `summary.json` and `analytics/history.jsonl`, computes quality + efficiency scores, and persists `pipeline_score` back into `summary.json`. Log the returned `pipeline_score` in the user-facing completion message.
 3. Call `mcp__sdd-autopilot__sdd_check_thresholds` to detect when metrics cross warning/critical thresholds:
@@ -648,7 +650,9 @@ After PR creation succeeds:
    - If `success: true`: log to the user: "New golden baseline set: {pipeline_score} (feature: {feature_id})"
    - If the tool returns an error: log the error but do not fail the pipeline.
 
-6. Call `mcp__sdd-autopilot__sdd_run_retro` to generate the structured retrospective before launching haiku-analyst:
+6. **MANDATORY — this step must execute even if the pipeline failed, was escalated, or was interrupted.** The retro is the most valuable observability artifact when things go wrong.
+
+   Call `mcp__sdd-autopilot__sdd_run_retro` to generate the structured retrospective before launching haiku-analyst:
    ```
    mcp__sdd-autopilot__sdd_run_retro(
      project_path,
