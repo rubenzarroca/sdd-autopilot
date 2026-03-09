@@ -35,6 +35,15 @@ export async function handleEmitMetrics(params: {
   project_path: string;
   metrics: PhaseMetrics;
 }): Promise<unknown> {
+  // Fusion 3: validate metrics before writing
+  const validation = await handleValidateMetrics({
+    project_path: params.project_path,
+    metrics: params.metrics as unknown as Record<string, unknown>,
+  });
+  if (!(validation as any).valid) {
+    return { emitted: false, validation_errors: (validation as any).errors };
+  }
+
   const runDir = resolve(params.project_path, ".sdd", "runs", params.metrics.feature_id);
   await mkdir(runDir, { recursive: true });
 
@@ -150,6 +159,14 @@ export async function handleGetRunSummary(params: {
   await mkdir(analyticsDir, { recursive: true });
   const historyPath = join(analyticsDir, "history.jsonl");
   await appendFile(historyPath, JSON.stringify(summary) + "\n", "utf-8");
+
+  // Fusion 2: include threshold alerts inline
+  const thresholdResult = await handleCheckThresholds({
+    project_path: params.project_path,
+    feature_id: params.feature_id,
+  });
+  const threshold_alerts = (thresholdResult as any).alerts ?? [];
+  (summary as any).threshold_alerts = threshold_alerts;
 
   return summary;
 }

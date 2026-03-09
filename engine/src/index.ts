@@ -25,6 +25,7 @@ import {
   handleAppendSignal,
   handleUpdateTask,
   handleUpdateFeature,
+  handleTickMaintenance,
 } from "./handlers.js";
 
 import {
@@ -77,6 +78,7 @@ export const TOOLS = [
       properties: {
         project_path: { type: "string", description: "Absolute path to the project root" },
         feature_id: { type: "string", description: "Optional: specific feature to query" },
+        include_run_log: { type: "boolean", description: "Optional: if true and feature_id is set, include live run status (from sdd_get_live_status)" },
       },
       required: ["project_path"],
     },
@@ -373,6 +375,7 @@ export const TOOLS = [
   {
     name: "sdd_tick_decay",
     description:
+      "@deprecated Use sdd_tick_maintenance with target='memory' instead. " +
       "Decrement TTL of learned patterns and exploration entries. Removes expired entries.",
     inputSchema: {
       type: "object" as const,
@@ -626,6 +629,7 @@ export const TOOLS = [
   {
     name: "sdd_tick_patterns",
     description:
+      "@deprecated Use sdd_tick_maintenance with target='patterns' instead. " +
       "Decrement TTL of all active and candidate ExploitationPatterns by 1. " +
       "Patterns that reach TTL=0 are marked as decayed. " +
       "Call once per pipeline run at post-pipeline (same time as sdd_tick_decay).",
@@ -1127,6 +1131,7 @@ export const TOOLS = [
   {
     name: "sdd_check_thresholds",
     description:
+      "@deprecated Threshold alerts are now included in sdd_get_run_summary response. " +
       "Detect when metrics cross thresholds and emit warnings/criticals. " +
       "Checks per-phase fix_loops and duration ratio vs historical average, " +
       "plus run-level first_pass_rate and total_duration. " +
@@ -1227,6 +1232,7 @@ export const TOOLS = [
   {
     name: "sdd_get_live_status",
     description:
+      "@deprecated Use sdd_get_state with include_run_log=true instead. " +
       "Query what phase is currently executing for a feature. " +
       "Reads run.log for phase_start/phase_end events and metrics.jsonl for completed phases. " +
       "Returns status (running/idle), current_phase, elapsed_seconds, and last_completed_phase.",
@@ -1359,6 +1365,7 @@ export const TOOLS = [
   {
     name: "sdd_validate_metrics",
     description:
+      "@deprecated Validation is now built into sdd_emit_metrics (returns validation_errors on failure). " +
       "Validate a PhaseMetrics object before persisting with sdd_emit_metrics. " +
       "Checks required fields (run_id, feature_id, phase, agent, model, timestamps, duration, gate_result, gate_attempts, findings_count, fix_loop_count), " +
       "validates types, ISO timestamps, non-negative numbers, gate_result enum, and warns about unknown fields.",
@@ -1431,7 +1438,8 @@ export const TOOLS = [
   // ─── GAP-07: Subagent Breadcrumbs ───────────────────────────────────
   {
     name: "sdd_breadcrumb",
-    description: "Record a subagent decision breadcrumb. Appends to .sdd/analytics/breadcrumbs.jsonl. Use when a subagent makes an architectural decision or chooses between alternatives.",
+    description: "@deprecated Use sdd_log_event with event_type='decision' and data={decision, reasoning, alternatives_considered} instead. " +
+      "Record a subagent decision breadcrumb. Appends to .sdd/analytics/breadcrumbs.jsonl. Use when a subagent makes an architectural decision or chooses between alternatives.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -1456,6 +1464,36 @@ export const TOOLS = [
         breadcrumb: { type: "object", description: "The persisted breadcrumb object" },
       },
       description: "Confirmation with the recorded breadcrumb",
+    },
+  },
+
+  // ─── Fusion: sdd_tick_maintenance ──────────────────────────────────
+  {
+    name: "sdd_tick_maintenance",
+    description:
+      "Unified maintenance tick: decays memory TTLs (learned patterns + explorations) AND metacognition pattern TTLs in one call. " +
+      "Replaces calling sdd_tick_decay + sdd_tick_patterns separately. " +
+      "Use target='all' (default) for both, 'patterns' for metacognition only, 'memory' for memory decay only.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        project_path: { type: "string", description: "Absolute path to the project root" },
+        target: {
+          type: "string",
+          enum: ["all", "patterns", "memory"],
+          description: "What to tick: 'all' (default), 'patterns' (metacognition only), 'memory' (learned patterns + explorations only)",
+        },
+      },
+      required: ["project_path"],
+    },
+    outputSchema: {
+      type: "object" as const,
+      description: "Combined maintenance tick results",
+      properties: {
+        patterns: { type: "object", description: "Result from sdd_tick_patterns (null if target=memory)", additionalProperties: true },
+        memory:   { type: "object", description: "Result from sdd_tick_decay (null if target=patterns)", additionalProperties: true },
+        target:   { type: "string", description: "The target that was ticked" },
+      },
     },
   },
 
@@ -1586,6 +1624,8 @@ export const HANDLER_MAP: Record<string, HandlerFn> = {
   sdd_run_retro:            handleRunRetro,
   sdd_phase_confidence:     handlePhaseConfidence,
   sdd_set_golden:           handleSetGolden,
+  // Fusion tools
+  sdd_tick_maintenance:        handleTickMaintenance,
   // Tool Factory (Self-Evolution)
   sdd_propose_tool:          handleProposeTool,
   sdd_review_tool_proposal:  handleReviewToolProposal,

@@ -34,6 +34,7 @@ try {
 export async function handleGetState(params: {
   project_path: string;
   feature_id?: string;
+  include_run_log?: boolean;
 }): Promise<unknown> {
   const sm = new StateManager(params.project_path);
   const exists = await sm.exists();
@@ -46,7 +47,19 @@ export async function handleGetState(params: {
     if (!feature) {
       return { error: `Feature "${params.feature_id}" not found` };
     }
-    return { feature_id: params.feature_id, ...feature };
+    const result: Record<string, unknown> = { feature_id: params.feature_id, ...feature };
+
+    // Fusion 4: optionally include live run status
+    if (params.include_run_log) {
+      const { handleGetLiveStatus } = await import("./observability.js");
+      const liveStatus = await handleGetLiveStatus({
+        project_path: params.project_path,
+        feature_id: params.feature_id,
+      });
+      result.live_status = liveStatus;
+    }
+
+    return result;
   }
   return state;
 }
@@ -436,6 +449,25 @@ export async function handleLogEvent(params: {
 
   await appendFile(logPath, JSON.stringify(entry) + "\n", "utf-8");
 
+  // Fusion 5: when event_type is "decision", also write to breadcrumbs.jsonl
+  if (params.event_type === "decision" && params.data) {
+    const analyticsDir = resolve(params.project_path, ".sdd", "analytics");
+    await mkdir(analyticsDir, { recursive: true });
+
+    const breadcrumb = {
+      feature_id: params.feature_id,
+      phase: params.phase ?? "unknown",
+      agent: params.agent_id ?? "unknown",
+      decision: (params.data.decision as string) ?? "",
+      reasoning: (params.data.reasoning as string) ?? "",
+      alternatives_considered: (params.data.alternatives_considered as string[]) ?? [],
+      timestamp,
+    };
+
+    const breadcrumbsPath = join(analyticsDir, "breadcrumbs.jsonl");
+    await appendFile(breadcrumbsPath, JSON.stringify(breadcrumb) + "\n", "utf-8");
+  }
+
   return { logged: true, timestamp };
 }
 
@@ -775,6 +807,32 @@ export async function handleTickDecay(params: {
     patterns_removed: removedPatterns,
     explorations_expired: expiredExplorations,
     total_removed: removedPatterns + expiredExplorations,
+  };
+}
+
+// ─── 11b. sdd_tick_maintenance ────────────────────────────────────
+// Fusion of sdd_tick_decay + sdd_tick_patterns into a single maintenance tick.
+
+export async function handleTickMaintenance(params: {
+  project_path: string;
+  target?: "all" | "patterns" | "memory";
+}): Promise<unknown> {
+  const target = params.target ?? "all";
+  let patternsResult = null;
+  let memoryResult = null;
+
+  if (target === "all" || target === "patterns") {
+    const { handleTickPatterns } = await import("./metacognition.js");
+    patternsResult = await handleTickPatterns({ project_path: params.project_path });
+  }
+  if (target === "all" || target === "memory") {
+    memoryResult = await handleTickDecay({ project_path: params.project_path });
+  }
+
+  return {
+    patterns: patternsResult,
+    memory: memoryResult,
+    target,
   };
 }
 
