@@ -135,13 +135,14 @@ describe('Pipeline Behavioral Test', () => {
   });
 
   it('should add tasks and transition decomposed -> implementing', async () => {
-    // Add tasks to state via direct state manipulation
+    // Add tasks and worktree marker to state via direct state manipulation
     const statePath = join(projectPath, '.sdd', 'state.json');
     const state = JSON.parse(readFileSync(statePath, 'utf-8'));
     state.features[featureId].tasks = {
       'task-1': { status: 'pending', title: 'Implement greeting function' },
       'task-2': { status: 'pending', title: 'Add unit test' },
     };
+    state.features[featureId].skip_worktree = true; // simulate --skip-worktree for test
     writeFileSync(statePath, JSON.stringify(state, null, 2));
 
     const result = await handleTransition({
@@ -287,6 +288,7 @@ describe('Pipeline Behavioral Test', () => {
       review_attempts: 0,
       fix_loop_attempts: 0,
       fix_review_attempts: 0,
+      skip_worktree: true,
     };
     writeFileSync(statePath, JSON.stringify(state, null, 2));
 
@@ -315,6 +317,7 @@ describe('Pipeline Behavioral Test', () => {
       review_attempts: 0,
       fix_loop_attempts: 0,
       fix_review_attempts: 0,
+      skip_worktree: true,
     };
     writeFileSync(statePath, JSON.stringify(state, null, 2));
 

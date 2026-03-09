@@ -86,6 +86,9 @@ export interface FeatureEntry {
   blocked_reason?: string;
   escalation_reason?: string;
   awaiting_input_reason?: string;
+  pr_url?: string;
+  pr_number?: number;
+  skip_worktree?: boolean;        // true when --skip-worktree flag is used
 }
 
 // ─── State root ──────────────────────────────────────────────────

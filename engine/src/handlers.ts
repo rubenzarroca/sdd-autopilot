@@ -879,6 +879,9 @@ export async function handleUpdateFeature(params: {
     blocked_reason: string;
     escalation_reason: string;
     awaiting_input_reason: string;
+    pr_url: string;
+    pr_number: number;
+    skip_worktree: boolean;
   }>;
 }): Promise<unknown> {
   const sm = new StateManager(params.project_path);

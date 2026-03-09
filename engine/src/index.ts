@@ -428,7 +428,7 @@ export const TOOLS = [
     name: "sdd_update_feature",
     description:
       "Persist feature metadata fields (plan_path, tasks_path, worktree_path, branch, blocked_reason, " +
-      "escalation_reason, awaiting_input_reason). Use instead of writing state.json directly.",
+      "escalation_reason, awaiting_input_reason, pr_url, pr_number, skip_worktree). Use instead of writing state.json directly.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -445,6 +445,9 @@ export const TOOLS = [
             blocked_reason: { type: "string" },
             escalation_reason: { type: "string" },
             awaiting_input_reason: { type: "string" },
+            pr_url: { type: "string", description: "URL of the created pull request" },
+            pr_number: { type: "number", description: "PR number for merge verification via GitHub API" },
+            skip_worktree: { type: "boolean", description: "Set to true when --skip-worktree flag is used (bypasses worktree precondition gate)" },
           },
           additionalProperties: false,
         },

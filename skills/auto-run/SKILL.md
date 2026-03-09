@@ -71,13 +71,20 @@ You are the orchestrator for the SDD Autopilot pipeline. You coordinate the full
    - After creating the file, call `sdd_get_state` again to confirm it loaded correctly before proceeding.
    - Report to the user: "Project not initialized — auto-initialized at {path}. Starting pipeline..."
 
-3b. **Auto-recover incomplete runs**: After `sdd_get_state` succeeds, check if any feature in `state.features` has a state that is NOT `pr_created`, `merged`, or `draft`. If found:
+3b. **Auto-recover incomplete runs**: After `sdd_get_state` succeeds, check if any feature in `state.features` has a state that is NOT `pr_created`, `merged`, `escalated`, or `draft`. If found:
    - This means a previous run was interrupted (e.g. by context compaction).
    - Read the incomplete feature's `feature_id` from state (do NOT hardcode — use `Object.keys(state.features)` and filter by state).
    - Check `.sdd/runs/{feature_id}/` for missing artifacts (same detection logic as `--recover`).
    - Execute the recovery flow automatically: emit missing metrics, run missing post-pipeline steps, show the observability report.
    - Report: "Recovered incomplete run for '{feature_id}'. {N} missing steps completed."
    - After recovery, continue to step 4 with the NEW feature from `$ARGUMENTS`.
+
+3c. **Check pending merges and clean up worktrees**: Also check if any feature has state `pr_created` with a `pr_number` set. For each:
+   - Run `gh api repos/{owner}/{repo}/pulls/{pr_number} --jq '.merged'`
+   - If `true`:
+     1. Call `sdd_transition(pr_created→merged)` with metadata `{ merged_at: now }` and report "PR #{pr_number} for '{feature_id}' has been merged. State updated to merged."
+     2. If the feature has a `worktree_path` set: invoke `/worktree-pr` skill with command `cleanup` in automated mode (`repo_path` = project_path, `feature_name` = feature_id). This removes the orphaned worktree directory and branches.
+   - If `false`: no action needed — the feature stays in `pr_created`.
 
 4. **Create the feature entry**: Before calling any MCP tool that operates on a feature, add the feature to `state.json` by writing it directly (there is no `sdd_create_feature` tool). The feature entry MUST use this exact schema — missing fields will cause `sdd_transition` to crash:
    ```json
@@ -298,7 +305,11 @@ After triage completes, determine the execution mode based on the `complexity` f
 
 **Full mode details:**
 - All 8 phases run sequentially. Pair review (`opus-coach`) is only invoked if the user passes `--pair-review` flag.
-- For high-complexity features, suggest `--pair-review` to the user in the triage output, but do NOT activate it automatically.
+- If the user did NOT pass `--pair-review`, display this notice immediately after logging the execution mode (no pause, continue pipeline):
+  ```
+  ⚡ Triage: {complexity}. Full mode. Pair review available — re-run with --pair-review for opus-coach validation on spec, implementation, and verification.
+  ```
+- If the user already passed `--pair-review`: do NOT display the notice (they already opted in).
 
 Log the selected mode:
 ```
@@ -336,9 +347,11 @@ These phases have `pair_review` enabled:
 
 The implement phase runs per-task, not as a single invocation:
 
-### Worktree setup (before first task)
+### Worktree setup (before first task) — HARD GATE
 
-Unless `--skip-worktree` is set, create an isolated worktree immediately after the tasks gate passes and before launching any implementation-engine:
+**The state machine enforces a worktree precondition**: `sdd_transition` will reject any transition to `implementing` from `decomposed`, `draft`, or `specified` unless `worktree_path` or `skip_worktree` is set on the feature. This is not a soft instruction — the transition will return `PRECONDITION_FAILED` and the pipeline will stall.
+
+**Standard flow** (no `--skip-worktree`):
 
 1. Invoke the `/worktree-pr` skill via the `Skill` tool with command `start` in **automated mode** (all inputs provided, no confirmation prompts):
    - `repo_path`: the project path
@@ -349,20 +362,51 @@ Unless `--skip-worktree` is set, create an isolated worktree immediately after t
    sdd_update_feature(project_path, feature_id, updates={ worktree_path: "...", branch: "feat/..." })
    ```
 3. All subsequent subagents (implementation-engine, verification-engine) receive `worktree_path` as their working directory. The review phase uses `/code-review` plugin inline (no subagent).
+4. **Only after step 2 succeeds**, call `sdd_transition` to enter `implementing`. The transition will now pass the worktree precondition.
 
-If `--skip-worktree`: skip steps 1–3 and work directly in `project_path`.
+**If worktree creation fails** (e.g. git error, disk space, branch conflict):
+- Do NOT retry silently. Call `sdd_transition(current_state → escalated)` with `escalation_reason: "Worktree creation failed: {error}"`.
+- Report the error to the user.
+
+**If `--skip-worktree`**: mark the feature immediately after creation:
+```
+sdd_update_feature(project_path, feature_id, updates={ skip_worktree: true })
+```
+Then work directly in `project_path`. The state machine will accept the transition because `skip_worktree` is set.
 
 ### Per-task execution
 
-1. Read `specs/{feature_id}/tasks.md` to get the task list
-2. Compute execution waves from the task dependency graph (tasks with no dependencies run in wave 1, etc.)
-3. For each wave: if the wave has **2+ tasks**, invoke `/orchestrating-agent-teams` to launch them as a parallel team — each teammate runs `implementation-engine` for one task. If the wave has a single task, launch `implementation-engine` directly (no team needed). For each task in the wave:
+**Step 0 — Parallelization analysis (MANDATORY, no exceptions)**
+
+Before executing the first task, the orchestrator MUST:
+
+1. Read the `/orchestrating-agent-teams` skill via the `Skill` tool to load team orchestration capabilities.
+2. Analyze the DAG from `tasks.md`: parse task dependencies, compute waves (tasks with no unmet dependencies form wave 1, tasks whose dependencies are all in prior waves form wave 2, etc.), and check for file ownership conflicts (two tasks in the same wave touching the same file must be serialized).
+3. Log the decision via `sdd_log_event` with the analysis result. This log is **mandatory** — if it is missing, the run has a protocol violation. Format:
+   ```
+   sdd_log_event(project_path, feature_id, event_type="parallelization_analysis", phase="implement", agent_id="orchestrator",
+     data={
+       total_tasks: N,
+       waves: [[task_ids_wave_1], [task_ids_wave_2], ...],
+       strategy: "parallel" | "sequential",
+       reason: "{justification}"
+     })
+   ```
+   Display to the user:
+   - Parallel: `"⚡ Parallelization: {N} waves detected ({wave_sizes}). Spawning agent team."`
+   - Sequential: `"⚡ Parallelization: all {N} tasks sequential ({reason}). Single-agent execution."`
+4. Only then proceed to step 1 below.
+
+**Step 1–4 — Task execution**
+
+1. Read `specs/{feature_id}/tasks.md` to get the task list (already parsed in step 0).
+2. Execute waves in order from step 0's analysis. For each wave: if the wave has **2+ tasks**, invoke `/orchestrating-agent-teams` to launch them as a parallel team — each teammate runs `implementation-engine` for one task. If the wave has a single task, launch `implementation-engine` directly (no team needed). For each task in the wave:
    a. Extract the task block from tasks.md
    b. Launch `implementation-engine` with that task block + spec + plan + memory, pointing it at `worktree_path` (or `project_path` if `--skip-worktree`)
    c. If pair_review is enabled for this stage: run opus-coach on the result
    d. The implementation-engine marks the task completed via `sdd_update_task` and logs via `sdd_transition(implementing→implementing)`. Verify task status is "completed" in state before moving to next task.
    Wait for all tasks in the wave to complete before starting the next wave.
-4. After all tasks complete: call `sdd_transition(implementing→verifying)`
+3. After all tasks complete: call `sdd_transition(implementing→verifying)`
 
 ## Observability
 
@@ -658,15 +702,35 @@ Phase 8 is executed inline by the orchestrator (no subagent needed):
       - `title`: `"feat({feature-id}): {one-line summary from spec overview}"`
       - `description`: contents of `specs/{feature-id}/spec.md` (truncated to 60k chars if needed)
    b. `worktree-pr finish` commits all changes, pushes `feat/{feature-id}`, and opens the PR.
-   c. Call `sdd_transition(pr_created→merged)` with metadata `{ pr_url, diff_stats }`.
+   c. Extract `pr_url` and `pr_number` from the PR creation output.
+   d. Call `sdd_update_feature(project_path, feature_id, { pr_url, pr_number })` to persist PR metadata in state.json.
+   e. **Do NOT transition to `merged`** — the feature stays in `pr_created` until the PR is actually merged on GitHub.
 2. If `--skip-worktree` or worktree was not created:
    a. `git add -A`
    b. `git commit -m "feat({feature-id}): {feature_description}"`
    c. `git push -u origin HEAD`
    d. `gh pr create --title "[SDD] {feature_name}" --body "$(cat specs/{feature-id}/spec.md | head -50)" --label sdd-autopilot`
-   e. Call `sdd_transition(pr_created→merged)` with metadata `{ pr_url, diff_stats }`.
+   e. Extract `pr_url` and `pr_number` from the `gh pr create` output.
+   f. Call `sdd_update_feature(project_path, feature_id, { pr_url, pr_number })` to persist PR metadata in state.json.
+   g. **Do NOT transition to `merged`** — the feature stays in `pr_created`.
 
 If `--skip-pr` is set: skip push + PR creation but still commit.
+
+### Merge verification
+
+After the PR is created (state = `pr_created`), the orchestrator verifies the actual merge via GitHub API before transitioning to `merged`:
+
+1. Run: `gh api repos/{owner}/{repo}/pulls/{pr_number} --jq '.merged'`
+   - Uses the `GITHUB_TOKEN` environment variable for authentication (already configured by `gh`).
+   - Extract `{owner}/{repo}` from `git remote get-url origin`.
+   - Extract `{pr_number}` from the PR creation output or from `state.features[feature_id].pr_number`.
+2. If the response is `true`:
+   - Call `sdd_transition(pr_created→merged)` with metadata `{ pr_url, merged_at: now }`.
+   - Proceed to worktree cleanup and post-pipeline.
+3. If the response is `false`:
+   - Report to the user: "PR #{pr_number} created but not yet merged. The feature will remain in `pr_created` state. Run `/sdd-auto:status` to check progress, or re-run the pipeline with `--recover {feature_id}` after the PR is merged."
+   - **Do NOT block the pipeline** — proceed to post-pipeline steps (retro, scoring, etc.) with the feature in `pr_created` state.
+   - Worktree cleanup is skipped (the user may need the worktree until merge).
 
 ## Post-pipeline
 
@@ -791,10 +855,11 @@ After PR creation (or after pipeline termination if it did not reach PR):
 
 After step 9 (sdd_memory_write), proceed to the Adaptive Run Close sequence.
 
-10. **Worktree cleanup** (after Adaptive Run Close completes, if worktree was created and PR is merged):
-   - Invoke the `/worktree-pr` skill via the `Skill` tool with command `cleanup` in automated mode: `repo_path` = project_path, `feature_name` = feature_id
-   - This removes the sibling directory, deletes local and remote `feat/{feature-id}` branches, and pulls latest default branch.
-   - If PR is not yet merged (e.g. `--skip-pr` was used): skip cleanup and report the worktree path to the user.
+10. **Worktree cleanup** (after Adaptive Run Close completes, if worktree was created and `skip_worktree` is not set):
+   - **If feature state is `merged`**: invoke `/worktree-pr` skill with command `cleanup` in automated mode: `repo_path` = project_path, `feature_name` = feature_id. This removes the sibling directory, deletes local and remote `feat/{feature-id}` branches, and pulls latest default branch.
+   - **If feature state is `escalated`**: invoke `/worktree-pr` skill with command `cleanup` in automated mode (same params). The worktree is no longer needed — the feature was abandoned.
+   - **If feature state is `pr_created`** (PR not yet merged): skip cleanup and report the worktree path to the user: "Worktree preserved at {worktree_path} — will be cleaned up automatically on next pipeline run after PR is merged."
+   - **If `--skip-pr` was used**: skip cleanup (no worktree branch was pushed).
 
 ## Flags
 

@@ -191,6 +191,19 @@ export class StateManager {
       }
     }
 
+    // Worktree gate: first entry into implementing requires an active worktree (or explicit skip).
+    // Re-entries from fix_loop/fix_review already have a worktree — only check initial transitions.
+    const WORKTREE_REQUIRED_ORIGINS = new Set<FeatureState>(["decomposed", "draft", "specified"]);
+    if (toState === "implementing" && WORKTREE_REQUIRED_ORIGINS.has(fromState)) {
+      if (!feature.worktree_path && !feature.skip_worktree) {
+        return {
+          ok: false,
+          code: "PRECONDITION_FAILED",
+          reason: "No worktree active for this feature. Run /worktree-pr start and store worktree_path via sdd_update_feature, or set skip_worktree: true.",
+        };
+      }
+    }
+
     if (toState === "verifying") {
       const pending = Object.entries(feature.tasks)
         .filter(([, t]) => t.status !== "completed")
@@ -287,7 +300,7 @@ export class StateManager {
 
   async updateFeatureField(
     featureName: string,
-    updates: Partial<Pick<FeatureEntry, "plan_path" | "tasks_path" | "worktree_path" | "branch" | "blocked_reason" | "escalation_reason" | "awaiting_input_reason">>,
+    updates: Partial<Pick<FeatureEntry, "plan_path" | "tasks_path" | "worktree_path" | "branch" | "blocked_reason" | "escalation_reason" | "awaiting_input_reason" | "pr_url" | "pr_number" | "skip_worktree">>,
   ): Promise<void> {
     const state = await this.read();
     const feature = state.features[featureName];

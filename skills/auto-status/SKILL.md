@@ -18,12 +18,17 @@ Display the current state of all features in the project.
 
 2. Read `.sdd/state.json`. If it doesn't exist, report: "No SDD state found. Run `/sdd-auto:init` first."
 
-3. Display a summary:
+3. Display a summary. The header line for the active/completed feature depends on state:
+
+   - If `state == "merged"` or `state == "escalated"`: show `Completed feature: {name} ✓` (or `✗` for escalated)
+   - If `state == "pr_created"`: show `Awaiting merge: {name} (PR #{pr_number})`
+   - Otherwise (any intermediate state): show `Active feature: {name}`
+   - If no features or all features are in terminal states with no active_feature: show `Active feature: none`
 
 ```
 SDD Autopilot Status — {project name}
 Initialized: {date}
-Active feature: {name or "none"}
+{feature header line from above}
 
 Features:
   {feature-name}:
@@ -33,9 +38,10 @@ Features:
     Review attempts: {n}
     Spec: {spec_path}
     Branch: {branch or "n/a"}
+    PR: {pr_url or "n/a"}
 ```
 
-4. If there's an active feature, show its transition history.
+4. If there's an active feature or a feature awaiting merge, show its transition history.
 
 5. If no features exist, report: "No features yet. Run `/sdd-auto:run \"feature description\"` to start."
 
