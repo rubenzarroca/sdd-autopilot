@@ -48,10 +48,9 @@ export const AGENT_PERMISSIONS: Record<AgentId, TransitionEdge[]> = {
     { from: "verifying",      to: "awaiting_input" },    // SPEC_GAP detected
     { from: "verifying",      to: "reviewing" },         // PASS
   ],
-  "adversarial-reviewer": [
-    { from: "reviewing",      to: "pr_created" },        // APPROVE
-    { from: "reviewing",      to: "fix_review" },        // REQUEST_CHANGES
-  ],
+  // adversarial-reviewer: DEPRECATED — review phase now handled by orchestrator via /code-review plugin
+  // Transitions moved to orchestrator permissions below
+  "adversarial-reviewer": [],
   "pr-creator": [
     { from: "pr_created",     to: "merged" },
   ],
@@ -70,8 +69,9 @@ export const AGENT_PERMISSIONS: Record<AgentId, TransitionEdge[]> = {
     { from: "specified",      to: "implementing" },
     // Express/Light: implementing → reviewing (skip verify — use haiku-validator gate instead)
     { from: "implementing",   to: "reviewing" },
-    // Express/Light: reviewing → pr_created (orchestrator can approve directly via /code-review)
-    { from: "reviewing",      to: "pr_created" },
+    // Review phase (all modes): orchestrator handles review via /code-review plugin
+    { from: "reviewing",      to: "pr_created" },        // APPROVE
+    { from: "reviewing",      to: "fix_review" },        // REQUEST_CHANGES
     // any→escalated handled via isEscalation special-case in transition()
   ],
 };

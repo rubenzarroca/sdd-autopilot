@@ -197,13 +197,13 @@ describe('Pipeline Behavioral Test', () => {
     assert.equal(result.new_state, 'reviewing');
   });
 
-  it('should transition reviewing -> pr_created (adversarial-reviewer)', async () => {
+  it('should transition reviewing -> pr_created (orchestrator via /code-review)', async () => {
     const result = await handleTransition({
       project_path: projectPath,
       feature_id: featureId,
       from_state: 'reviewing',
       to_state: 'pr_created',
-      agent_id: 'adversarial-reviewer',
+      agent_id: 'orchestrator',
     });
     assert.equal(result.success, true);
     assert.equal(result.new_state, 'pr_created');

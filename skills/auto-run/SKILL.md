@@ -13,7 +13,7 @@ user-invokable: true
 
 You are the orchestrator for the SDD Autopilot pipeline. You coordinate the full flow from feature description to pull request by invoking subagents and MCP tools. You do not implement, review, or specify — you only coordinate.
 
-**Do NOT invoke external skills** (e.g. `feature-dev`, `code-review`, `frontend-design`) to do work that belongs to a pipeline subagent. Each phase has a dedicated agent — use it. The only skills you may invoke via the `Skill` tool are `/orchestrating-agent-teams` (parallel task waves) and `/worktree-pr` (worktree + PR lifecycle).
+**Do NOT invoke external skills** (e.g. `feature-dev`, `frontend-design`) to do work that belongs to a pipeline subagent. Each phase has a dedicated agent — use it. The only skills you may invoke via the `Skill` tool are `/orchestrating-agent-teams` (parallel task waves), `/worktree-pr` (worktree + PR lifecycle), and `/code-review` (review phase — replaces adversarial-reviewer subagent).
 
 ## What to do
 
@@ -120,7 +120,7 @@ For each phase:
    - For phases with `gate.type = "mechanical"` or `"haiku-validator"`: call `mcp__sdd-autopilot__sdd_transition` to move to the next state
    - For phases with `gate.type = "self"` (verify, review): the transition depends on the subagent's structured output:
      - verify: VERIFICATION_RESULT.status=PASS → call `sdd_transition(verifying→reviewing)`. FAIL/SPEC_GAP → go to step 9.
-     - review: REVIEW_RESULT.decision=APPROVE → call `sdd_transition(reviewing→pr_created)`. REQUEST_CHANGES → call `sdd_transition(reviewing→fix_review)` then enter fix loop.
+     - review: invoke `/code-review` plugin (or haiku-validator fallback if unavailable). If review finds issues with confidence >= 80: gate FAIL → call `sdd_transition(reviewing→fix_review)` and enter fix loop. If no high-confidence issues: gate PASS → call `sdd_transition(reviewing→pr_created)`.
    - Call `mcp__sdd-autopilot__sdd_emit_metrics` with the PhaseMetrics for this phase (see Observability section below for the schema)
    - Call `sdd_log_event` with event_type `"phase_complete"`, data `{ gate_result: "passed", phase }` (see Observability section)
    - Call `mcp__sdd-autopilot__sdd_phase_confidence` to record the orchestrator's confidence in this phase's output. Assign confidence based on how the phase resolved:
@@ -252,7 +252,7 @@ instead of generating manual instructions for the user.
 {list each service with key capabilities, e.g. "- supabase: run SQL migrations, manage tables, execute queries"}
 ```
 
-**Agents that receive neither** (adversarial-reviewer, haiku-triage, haiku-validator, opus-meta-reviewer, retro-analyst, pr-creator):
+**Agents that receive neither** (haiku-triage, haiku-validator, opus-meta-reviewer, retro-analyst):
 
 No additional injection. These agents either already read constitution.md directly, only process metrics, or only execute mechanical operations.
 
@@ -316,7 +316,7 @@ sdd_log_event(project_path, feature_id, event_type="execution_mode_selected", ph
 | 4 | Tasks | `task-decomposer` | sonnet | `planned` -> `decomposed` |
 | 5 | Implement | `implementation-engine` (per task) | sonnet | `decomposed` -> `implementing` |
 | 6 | Verify | `verification-engine` | sonnet | `implementing` -> `verifying` -> `reviewing` |
-| 7 | Review | `adversarial-reviewer` | opus | `reviewing` -> `pr_created` or `fix_review` |
+| 7 | Review | orchestrator-inline (`/code-review` plugin) | sonnet (5 parallel agents) | `reviewing` -> `pr_created` or `fix_review` |
 | 8 | PR | `worktree-pr finish` + `pr-creator` | sonnet | `pr_created` (PR opened) |
 
 ### Pair review phases
@@ -348,7 +348,7 @@ Unless `--skip-worktree` is set, create an isolated worktree immediately after t
    ```
    sdd_update_feature(project_path, feature_id, updates={ worktree_path: "...", branch: "feat/..." })
    ```
-3. All subsequent subagents (implementation-engine, verification-engine, adversarial-reviewer) receive `worktree_path` as their working directory.
+3. All subsequent subagents (implementation-engine, verification-engine) receive `worktree_path` as their working directory. The review phase uses `/code-review` plugin inline (no subagent).
 
 If `--skip-worktree`: skip steps 1–3 and work directly in `project_path`.
 
@@ -1117,7 +1117,7 @@ This will:
 4. Decompose into tasks at `specs/health-check-endpoint/tasks.md`
 5. Implement all tasks (per-task, with pair review)
 6. Run verification (tests, spec coverage, regression, constitution)
-7. Run adversarial review (correctness, security, performance, maintainability, side effects)
+7. Run code review via /code-review plugin (correctness, security, performance, maintainability, side effects)
 8. Create a PR with structured metadata
 9. Run retrospective and update memory
 

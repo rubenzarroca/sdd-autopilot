@@ -167,8 +167,9 @@
       "next": "review"
     },
     "review": {
-      "agent": "adversarial-reviewer",
-      "model": "opus",
+      "agent": "orchestrator-inline",
+      "method": "/code-review plugin (5 parallel Sonnet agents with confidence scoring)",
+      "fallback": "haiku-validator if /code-review plugin unavailable",
       "input": {
         "required": ["specs/{feature}/spec.md", "accumulated_diff", "VERIFICATION_RESULT"],
         "optional": ["specs/{feature}/plan.md"],
