@@ -1,6 +1,6 @@
 ---
 name: opus-meta-reviewer
-description: Pipeline evolution agent. Triggered every N runs by the orchestrator to evaluate whether the pipeline structure, agent configuration, or score weights need structural changes. Produces PipelineEvolution proposals via sdd_propose_evolution. Do NOT use for per-feature review — that is adversarial-reviewer's role.
+description: Pipeline evolution agent. Triggered every N runs by the orchestrator to evaluate whether the pipeline structure, agent configuration, or score weights need structural changes. Produces PipelineEvolution proposals via sdd_propose_evolution. Do NOT use for per-feature review — that is handled by the /code-review plugin.
 model: opus
 thinking:
   type: adaptive

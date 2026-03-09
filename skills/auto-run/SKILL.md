@@ -545,7 +545,7 @@ At the start of each phase (after step 1 of the phase protocol -- reading curren
         section:      "learnings"
       )
       ```
-   b. Feed the full buffer as context to `haiku-analyst` in retro mode (post-pipeline step 7), so the retro can incorporate meta-learning observations.
+   b. Feed the full buffer as context to the inline retro analysis (post-pipeline step 7), so the retro can incorporate meta-learning observations.
 4. Mark all META_LEARNING_HINT signals as processed after the retro completes.
 
 ### Gap Detection Protocol
@@ -675,14 +675,7 @@ If `--skip-pr` is set: skip push + PR creation but still commit.
 After PR creation (or after pipeline termination if it did not reach PR):
 1. Call `mcp__sdd-autopilot__sdd_get_run_summary` with `project_path`, `feature_id`, and the `run_id` from step 2. This aggregates all PhaseMetrics into a RunSummary, persists `summary.json`, and appends to `analytics/history.jsonl`. After the call, patch `review_decision` in `summary.json` using the review agent's structured output (`APPROVE` → `"approve"`, `REQUEST_CHANGES` → `"request_changes"`).
 2. Call `mcp__sdd-autopilot__sdd_compute_score` with `project_path` and `feature_id`. This reads the patched `summary.json` and `analytics/history.jsonl`, computes quality + efficiency scores, and persists `pipeline_score` back into `summary.json`. Log the returned `pipeline_score` in the user-facing completion message.
-3. Call `mcp__sdd-autopilot__sdd_check_thresholds` to detect when metrics cross warning/critical thresholds:
-   ```
-   mcp__sdd-autopilot__sdd_check_thresholds(
-     project_path,
-     feature_id
-   )
-   ```
-   The tool checks per-phase fix loop counts (relative to contracts.json caps), duration ratios vs historical averages, run-level first_pass_rate, total_duration, and average phase confidence. It returns an `alerts` array where each alert has a `level` ("warning" or "critical") and a descriptive `message`.
+3. Extract `threshold_alerts` from the `sdd_get_run_summary` response (step 1). The run summary now includes threshold alerts inline (checks per-phase fix loop counts, duration ratios vs historical averages, run-level first_pass_rate, total_duration, and average phase confidence). Each alert has a `level` ("warning" or "critical") and a descriptive `message`.
 
    **Handle the response:**
    - If any alert has `level: "critical"`:
@@ -700,7 +693,7 @@ After PR creation (or after pipeline termination if it did not reach PR):
        sdd_log_event(project_path, feature_id, event_type="threshold_alert", phase="post_pipeline", agent_id="orchestrator",
          data={ alert_count: N, critical_count: N, warning_count: N, alerts: alerts })
        ```
-     - Store the critical alerts in a `threshold_alerts` variable — pass them to `sdd_run_retro` context (step 6) and to haiku-analyst (step 7).
+     - Store the critical alerts in a `threshold_alerts` variable — pass them to `sdd_run_retro` context (step 6) and to inline retro analysis (step 7).
    - If alerts exist but all are `level: "warning"`: store them for retro context only. Do not emit a signal.
    - If `alerts` is empty: proceed normally.
 
@@ -716,8 +709,8 @@ After PR creation (or after pipeline termination if it did not reach PR):
    **Handle the response:**
    - If `is_anomaly: true`:
      - Flag this run as anomalous. Store the anomaly details (`anomalies` array with `metric`, `value`, `mean`, `stddev`, `z_score` for each flagged metric) in an `anomaly_context` variable.
-     - **Do NOT promote any patterns from this run** — skip `sdd_promote_pattern` calls during the haiku-analyst retro step.
-     - Include `anomaly_context` in the retro and haiku-analyst context.
+     - **Do NOT promote any patterns from this run** — skip `sdd_promote_pattern` calls during inline retro analysis.
+     - Include `anomaly_context` in the retro analysis context.
    - If `is_anomaly: false` or `status: "insufficient_data"`: proceed normally. Pattern promotion is allowed.
 
 5. Conditionally call `mcp__sdd-autopilot__sdd_set_golden` if the pipeline score beats the current golden baseline:
@@ -739,7 +732,7 @@ After PR creation (or after pipeline termination if it did not reach PR):
 
 6. **MANDATORY — this step must execute even if the pipeline failed, was escalated, or was interrupted.** The retro is the most valuable observability artifact when things go wrong.
 
-   Call `mcp__sdd-autopilot__sdd_run_retro` to generate the structured retrospective before launching haiku-analyst:
+   Call `mcp__sdd-autopilot__sdd_run_retro` to generate the structured retrospective before inline retro analysis:
    ```
    mcp__sdd-autopilot__sdd_run_retro(
      project_path,
@@ -751,8 +744,8 @@ After PR creation (or after pipeline termination if it did not reach PR):
 
    **Handle the response:**
    - The returned retro object contains: `phase_breakdown`, `bottlenecks`, `patterns_confirmed`, `patterns_contradicted`, `suggestions`, `pipeline_score`, `outcome`.
-   - Store the retro output path (`.sdd/runs/{feature_id}/retro.json`) — pass it to haiku-analyst in step 7 as additional context.
-   - If threshold alerts (from step 3) or anomaly context (from step 4) exist, include them when launching haiku-analyst so it can incorporate those signals into its analysis.
+   - Store the retro output path (`.sdd/runs/{feature_id}/retro.json`) — use it in the inline retro analysis (step 7).
+   - If threshold alerts (from step 3) or anomaly context (from step 4) exist, incorporate them into the retro analysis.
 
 6b. **Review tool proposals (conditional):**
    If any tool proposals were created during this run (check `.sdd/proposals/` for files with `status: "proposed"` and matching `run_id`):
@@ -817,7 +810,7 @@ After step 9 (sdd_memory_write), proceed to the Adaptive Run Close sequence.
      - `retro.json` → whether retro ran
   3. Determine what's missing:
      - **Missing phase metrics**: phases that completed (state progressed past them) but have no entry in `metrics.jsonl`. For each, emit metrics with `duration_ms: -1` (unknown) and `gate_result: "pass"` (inferred from state progression). Log `event_type: "metrics_recovered"`.
-     - **Missing post-pipeline**: if `summary.json` doesn't exist, execute post-pipeline steps 1-9 (run_summary, compute_score, check_thresholds, detect_anomaly, set_golden, run_retro, haiku-analyst, META_LEARNING, memory_write).
+     - **Missing post-pipeline**: if `summary.json` doesn't exist, execute post-pipeline steps 1-9 (run_summary, compute_score, detect_anomaly, set_golden, run_retro, inline retro analysis, META_LEARNING, memory_write).
      - **Missing Adaptive Run Close**: if retro exists but no evolutions/patterns were processed, execute the Adaptive Run Close sequence.
   4. Show the observability report (same format as completion).
   5. Show the Human Debrief.
@@ -878,7 +871,7 @@ Continue to the specify phase (or the first non-skipped phase).
 
 ### ADAPTIVE RUN CLOSE
 
-Execute this sequence after the post-pipeline steps complete (steps 1-9: `sdd_get_run_summary`, `sdd_compute_score`, `sdd_check_thresholds`, `sdd_detect_anomaly`, `sdd_set_golden`, `sdd_run_retro`, haiku-analyst retro, META_LEARNING_HINT processing, `sdd_memory_write`). This section covers only the metacognition-specific steps.
+Execute this sequence after the post-pipeline steps complete (steps 1-9: `sdd_get_run_summary` (includes threshold alerts), `sdd_compute_score`, `sdd_detect_anomaly`, `sdd_set_golden`, `sdd_run_retro`, inline retro analysis, META_LEARNING_HINT processing, `sdd_memory_write`). This section covers only the metacognition-specific steps.
 
 **Step 1 -- Update pattern outcomes (sdd_update_pattern):**
 
@@ -1041,29 +1034,22 @@ e. **Process proposed evolutions (sdd_approve_evolution):**
 
    **Hard rule:** The orchestrator NEVER auto-approves structural evolutions.
 
-**Step 5 -- Tick pattern TTLs (sdd_tick_patterns):**
+**Step 5 -- Tick maintenance (patterns + memory decay):**
 ```
-mcp__sdd-autopilot__sdd_tick_patterns(
-  project_path: "{project_path}"
+mcp__sdd-autopilot__sdd_tick_maintenance(
+  project_path: "{project_path}",
+  target: "all"
 )
 ```
-This decrements TTLs using adaptive exponential decay. Patterns not recently confirmed decay faster. Patterns with `remaining_ttl < 1.0` are marked as `decayed`.
+This decrements pattern TTLs using adaptive exponential decay (patterns not recently confirmed decay faster; those with `remaining_ttl < 1.0` are marked as `decayed`) AND decrements memory TTLs, pruning stale entries. Replaces the old separate `sdd_tick_patterns` + `sdd_tick_decay` calls.
 
-**Step 6 -- Tick memory decay (sdd_tick_decay):**
-```
-mcp__sdd-autopilot__sdd_tick_decay(
-  project_path: "{project_path}"
-)
-```
-This decrements memory TTLs and prunes stale entries.
-
-**Step 7 -- Human Debrief:**
+**Step 6 -- Human Debrief:**
 
 Before showing the final completion message to the user, collect all items requiring human attention. Build the debrief from these 7 sources:
 
 1. **Tool proposals validated this run:** Read `.sdd/proposals/` for entries with `status: "validated"` or `"prompt_generated"` and `run_id` matching the current run.
 2. **Evolutions pending human approval:** Read `.sdd/metacognition/evolutions.json` for entries with `status: "proposed"` and `requires_human: true`.
-3. **Critical threshold alerts:** From the `sdd_check_thresholds` response (post-pipeline step 3), filter alerts where `level: "critical"`.
+3. **Critical threshold alerts:** From the `sdd_get_run_summary` response `threshold_alerts` field (post-pipeline step 1), filter alerts where `level: "critical"`.
 4. **Anomaly flags:** From the `sdd_detect_anomaly` response (post-pipeline step 4), if `is_anomaly: true`.
 5. **Golden degradation:** From the `sdd_compute_score` response (post-pipeline step 2), if `golden_comparison.status: "below_threshold"`.
 6. **Memory sanitization warnings:** From `feature.signals`, filter signals with `type: "memory_sanitization_warning"`.
