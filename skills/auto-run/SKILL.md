@@ -451,12 +451,14 @@ The implement phase runs per-task, not as a single invocation:
    ```
    sdd_update_feature(project_path, feature_id, updates={ worktree_path: "...", branch: "feat/..." })
    ```
-3. **Sync artifacts from main repo to worktree** — the spec, plan, and tasks were created in the main repo during earlier phases and are NOT committed, so the worktree branch does not have them. Copy the entire `specs/{feature_id}/` directory:
+3. **Sync artifacts from main repo to worktree, then remove from main repo** — the spec, plan, and tasks were created in the main repo during earlier phases and are NOT committed, so the worktree branch does not have them. Copy the entire `specs/{feature_id}/` directory, then delete the originals to prevent merge collisions when the PR is merged back:
    ```bash
-   # From the main repo, copy all artifacts to the worktree
+   # Copy all artifacts to the worktree
    cp -r "${project_path}/specs/${feature_id}" "${worktree_path}/specs/${feature_id}"
+   # Remove from main repo to avoid untracked file collision on merge
+   rm -rf "${project_path}/specs/${feature_id}"
    ```
-   This syncs `spec.md`, `plan.md`, `tasks.md`, and any other files generated during specify/plan/decompose. **If the copy fails, escalate** — implementation cannot proceed without artifacts.
+   This syncs `spec.md`, `plan.md`, `tasks.md`, and any other files generated during specify/plan/decompose. The removal prevents the "untracked files would be overwritten by merge" error when the feature branch is merged and the main repo pulls. **If the copy fails, escalate** — implementation cannot proceed without artifacts. Only remove after confirming the copy succeeded.
 4. All subsequent subagents (implementation-engine, verification-engine) receive `worktree_path` as their working directory. The review phase uses `/code-review` plugin inline (no subagent).
 5. **Only after steps 2–3 succeed**, call `sdd_transition` to enter `implementing`. The transition will now pass the worktree precondition.
 
