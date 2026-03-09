@@ -112,6 +112,32 @@ If `sdd_transition` returns an error:
    - Report: "Recovered incomplete run for '{feature_id}'. {N} missing steps completed."
    - After recovery, continue to step 4 with the NEW feature from `$ARGUMENTS`.
 
+   **Memory recovery check (safety net for lost writes):** Also check ALL features that have completed runs (any state including `pr_created`, `merged`, `escalated`). For each feature with a `retro.json` in `.sdd/runs/{feature_id}/`:
+   1. Read `summary.json` to extract the `run_id`.
+   2. Call `mcp__sdd-autopilot__sdd_memory_read(project_path, scope="project", section="run_history")` and check if the response contains the `run_id`.
+   3. If the `run_id` is NOT found in memory:
+      - Read `summary.json` and `retro.json` from `.sdd/runs/{feature_id}/`.
+      - Write the missing run history entry:
+        ```
+        mcp__sdd-autopilot__sdd_memory_write(
+          project_path: "{project_path}",
+          scope:        "project",
+          content:      "Run {run_id} for '{feature_id}' (recovered): phases={phase_count}, first_pass_rate={first_pass_rate}, pipeline_score={pipeline_score}, outcome={retro.outcome}",
+          section:      "run_history"
+        )
+        ```
+      - Write the missing retro summary:
+        ```
+        mcp__sdd-autopilot__sdd_memory_write(
+          project_path: "{project_path}",
+          scope:        "project",
+          content:      "Retro for run {run_id} ('{feature_id}', recovered): outcome={outcome}, bottlenecks={bottlenecks}, suggestions_count={suggestions.length}",
+          section:      "retro_learnings"
+        )
+        ```
+      - Report: "Recovered missing memory entries for run {run_id} ('{feature_id}')."
+   4. This check is idempotent — if memory already has the entry, skip silently.
+
 3c. **Check pending merges and clean up worktrees**: Also check if any feature has state `pr_created` with a `pr_number` set. For each:
    - Run `gh api repos/{owner}/{repo}/pulls/{pr_number} --jq '.merged'`
    - If `true`:
@@ -805,7 +831,29 @@ After the PR is created (state = `pr_created`), the orchestrator verifies the ac
 
 After PR creation (or after pipeline termination if it did not reach PR):
 1. Call `mcp__sdd-autopilot__sdd_get_run_summary` with `project_path`, `feature_id`, and the `run_id` from step 2. This aggregates all PhaseMetrics into a RunSummary, persists `summary.json`, and appends to `analytics/history.jsonl`. After the call, patch `review_decision` in `summary.json` using the review agent's structured output (`APPROVE` → `"approve"`, `REQUEST_CHANGES` → `"request_changes"`).
+
+   **Write-on-generate — persist Run History to memory immediately:**
+   ```
+   mcp__sdd-autopilot__sdd_memory_write(
+     project_path: "{project_path}",
+     scope:        "project",
+     content:      "Run {run_id} for '{feature_id}': phases={phase_count}, first_pass_rate={first_pass_rate}, total_duration={total_duration_ms}ms, review={review_decision}",
+     section:      "run_history"
+   )
+   ```
+   This ensures the run entry is persisted even if later steps are lost to context compaction.
+
 2. Call `mcp__sdd-autopilot__sdd_compute_score` with `project_path` and `feature_id`. This reads the patched `summary.json` and `analytics/history.jsonl`, computes quality + efficiency scores, and persists `pipeline_score` back into `summary.json`. Log the returned `pipeline_score` in the user-facing completion message.
+
+   **Write-on-generate — persist score to memory immediately:**
+   ```
+   mcp__sdd-autopilot__sdd_memory_write(
+     project_path: "{project_path}",
+     scope:        "project",
+     content:      "Score for run {run_id} ('{feature_id}'): pipeline_score={pipeline_score}, quality={quality_score}, efficiency={efficiency_score}, golden_status={golden_comparison.status}",
+     section:      "run_history"
+   )
+   ```
 3. Extract `threshold_alerts` from the `sdd_get_run_summary` response (step 1). The run summary now includes threshold alerts inline (checks per-phase fix loop counts, duration ratios vs historical averages, run-level first_pass_rate, total_duration, and average phase confidence). Each alert has a `level` ("warning" or "critical") and a descriptive `message`.
 
    **Handle the response:**
@@ -874,6 +922,17 @@ After PR creation (or after pipeline termination if it did not reach PR):
    - Store the retro output path (`.sdd/runs/{feature_id}/retro.json`) — use it in the inline retro analysis (step 7).
    - If threshold alerts (from step 3) or anomaly context (from step 4) exist, incorporate them into the retro analysis.
 
+   **Write-on-generate — persist retro summary to memory immediately:**
+   ```
+   mcp__sdd-autopilot__sdd_memory_write(
+     project_path: "{project_path}",
+     scope:        "project",
+     content:      "Retro for run {run_id} ('{feature_id}'): outcome={outcome}, bottlenecks={bottlenecks}, suggestions_count={suggestions.length}, patterns_confirmed={patterns_confirmed.length}, patterns_contradicted={patterns_contradicted.length}",
+     section:      "retro_learnings"
+   )
+   ```
+   This ensures the retro summary is persisted even if context compaction prevents step 9 from executing.
+
 6b. **Review tool proposals (conditional):**
    If any tool proposals were created during this run (check `.sdd/proposals/` for files with `status: "proposed"` and matching `run_id`):
 
@@ -914,7 +973,7 @@ After PR creation (or after pipeline termination if it did not reach PR):
    c. Log the retro analysis via `sdd_log_event(event_type="retro_analysis", ...)` even if no pattern or experiment was emitted.
 
 8. Process buffered META_LEARNING_HINT signals
-9. Write learnings to memory via `sdd_memory_write`
+9. **Consolidation write** — Write any remaining learnings to memory via `sdd_memory_write`. Note: the critical data (run history, score, retro summary) was already persisted by write-on-generate calls in steps 1, 2, and 6. This step covers META_LEARNING_HINT summaries and any inline retro analysis insights not yet written.
 
 After step 9 (sdd_memory_write), proceed to the Adaptive Run Close sequence.
 
@@ -939,11 +998,12 @@ After step 9 (sdd_memory_write), proceed to the Adaptive Run Close sequence.
   3. Determine what's missing:
      - **Missing phase metrics**: phases that completed (state progressed past them) but have no entry in `metrics.jsonl`. For each, emit metrics with `duration_ms: -1` (unknown) and `gate_result: "pass"` (inferred from state progression). Log `event_type: "metrics_recovered"`.
      - **Missing post-pipeline**: if `summary.json` doesn't exist, execute post-pipeline steps 1-9 (run_summary, compute_score, detect_anomaly, golden baseline (inline from compute_score), run_retro, inline retro analysis, META_LEARNING, memory_write).
+     - **Missing memory entries**: if `summary.json` and `retro.json` exist but `sdd_memory_read(section="run_history")` does not contain the `run_id`, write the missing entries (same logic as auto-recover memory recovery check in step 3b).
      - **Missing Adaptive Run Close**: if retro exists but no evolutions/patterns were processed, execute the Adaptive Run Close sequence.
   4. Show the observability report (same format as completion).
   5. Show the Human Debrief.
 
-  Recovery is idempotent — running it twice on the same feature won't duplicate data because `sdd_emit_metrics` and `sdd_get_run_summary` check for existing entries.
+  Recovery is idempotent — running it twice on the same feature won't duplicate data because `sdd_emit_metrics` and `sdd_get_run_summary` check for existing entries. Memory writes are also idempotent — `sdd_memory_write` appends only if the content is not already present.
 
 ## Post-pipeline iterations
 
