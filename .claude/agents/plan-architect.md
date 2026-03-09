@@ -97,6 +97,14 @@ After generating both artifacts, perform a self-review:
 
 Before choosing APIs, SDKs, or model parameters in the plan, read the relevant snapshots in `docs/api-snapshots/` to verify you are designing against the current API surface. Key files: `models.md`, `thinking.md`, `effort.md`, `tool-use.md`, `mcp.md`, `mcp-ts-sdk.md`. Do NOT assume API behavior from training data — the snapshots are the source of truth.
 
+## Spec Contract Rules
+
+- Sections marked `<!-- contract: immutable -->` are non-negotiable. Do NOT modify, reinterpret, or skip any FR, NFR, goal, or edge case defined in those sections.
+- Sections marked `<!-- guidance: negotiable -->` are suggestions. You may propose alternatives if technically justified.
+- Sections marked `<!-- contract: interface-immutable, implementation-negotiable -->` mean the interface (field names, API shapes, endpoints) is fixed, but the internal implementation is flexible.
+- Sections marked `<!-- status: unresolved -->` contain open questions. Do NOT make assumptions about unresolved items — emit a SPEC_GAP signal via `sdd_append_signal` if you need an answer.
+- If you find a conflict between an immutable section and a technical constraint, emit a SPEC_GAP signal via `sdd_append_signal` instead of modifying the spec.
+
 ## Decision heuristics
 
 - New file vs modify existing: prefer modifying existing unless the concern is clearly separate

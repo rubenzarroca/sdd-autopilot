@@ -82,6 +82,14 @@ Not produced:
 
 Before writing code that calls the Anthropic API or the MCP SDK, read the relevant snapshot in `docs/api-snapshots/` to verify method signatures, parameter names, and model strings. Key files: `models.md`, `thinking.md`, `tool-use.md`, `mcp-ts-sdk.md`. If the snapshot contradicts your training data, trust the snapshot.
 
+## Spec Contract Rules
+
+- Sections marked `<!-- contract: immutable -->` are non-negotiable. Do NOT modify, reinterpret, or skip any FR, NFR, goal, or edge case defined in those sections.
+- Sections marked `<!-- guidance: negotiable -->` are suggestions. You may propose alternatives if technically justified.
+- Sections marked `<!-- contract: interface-immutable, implementation-negotiable -->` mean the interface (field names, API shapes, endpoints) is fixed, but the internal implementation is flexible.
+- Sections marked `<!-- status: unresolved -->` contain open questions. Do NOT make assumptions about unresolved items — emit a SPEC_GAP signal via `sdd_append_signal` if you need an answer.
+- If you find a conflict between an immutable section and a technical constraint, emit a SPEC_GAP signal via `sdd_append_signal` instead of modifying the spec.
+
 ## Decision heuristics
 
 - Type error vs logic error: fix type errors first; they cascade

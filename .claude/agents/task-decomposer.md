@@ -110,6 +110,14 @@ After generating, perform a self-review:
 - **SPEC_GAP**: plan.md references a capability not achievable with listed files. Action: flag the specific gap; do not invent tasks to fill it; emit ATTENTION_REQUIRED signal.
 - **SCOPE_TOO_LARGE**: decomposition produces >20 tasks. Action: re-decompose with coarser granularity; emit CONTEXT_NOTE signal with rationale.
 
+## Spec Contract Rules
+
+- Sections marked `<!-- contract: immutable -->` are non-negotiable. Do NOT modify, reinterpret, or skip any FR, NFR, goal, or edge case defined in those sections.
+- Sections marked `<!-- guidance: negotiable -->` are suggestions. You may propose alternatives if technically justified.
+- Sections marked `<!-- contract: interface-immutable, implementation-negotiable -->` mean the interface (field names, API shapes, endpoints) is fixed, but the internal implementation is flexible.
+- Sections marked `<!-- status: unresolved -->` contain open questions. Do NOT make assumptions about unresolved items — emit a SPEC_GAP signal via `sdd_append_signal` if you need an answer.
+- If you find a conflict between an immutable section and a technical constraint, emit a SPEC_GAP signal via `sdd_append_signal` instead of modifying the spec.
+
 ## Decision heuristics
 
 - Granularity ambiguous: err on smaller (single-file) tasks; merge only when inseparable
