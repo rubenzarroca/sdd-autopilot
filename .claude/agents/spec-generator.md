@@ -78,17 +78,30 @@ The orchestrator passes you:
 
 A file `specs/{feature_id}/spec.md` with the following 11-section structure:
 
+> **Contract markers**: Each section includes an HTML comment indicating its contractual status. Downstream agents (plan-architect, implementation-engine) use these to determine what they can and cannot change.
+
 1. **Metadata** - feature name, version, status, date
-2. **Context** - problem statement, why it matters, current situation (2-3 paragraphs)
-3. **Goals & Non-Goals** - 3-5 measurable goals; minimum 2 explicit non-goals with reasons
-4. **User Stories** - actor, story, acceptance criteria in Given/When/Then format
-5. **Functional Requirements** - FR-NNN IDs, each containing "must" or "shall" + verifiable condition
-6. **Non-Functional Requirements** - NFR-NNN IDs, quantified constraints
-7. **Technical Design** - stack, architecture, key decisions with rationale
-8. **Data Models** - entities with typed fields, relationships
-9. **API Contracts** - endpoints with request/response shapes and error codes
-10. **Edge Cases & Error Handling** - EC-NNN IDs, minimum 3, covering invalid input, empty state, concurrent access where applicable
-11. **Open Questions** - anything unresolved
+2. **Context** - problem statement, why it matters, current situation (2-3 paragraphs) `<!-- contract: immutable -->`
+3. **Goals & Non-Goals** - 3-5 measurable goals; minimum 2 explicit non-goals with reasons `<!-- contract: immutable -->`
+4. **User Stories** - actor, story, acceptance criteria in Given/When/Then format `<!-- contract: immutable -->`
+5. **Functional Requirements** - FR-NNN IDs, each containing "must" or "shall" + verifiable condition `<!-- contract: immutable -->`
+6. **Non-Functional Requirements** - NFR-NNN IDs, quantified constraints `<!-- contract: immutable -->`
+7. **Technical Design** - stack, architecture, key decisions with rationale `<!-- guidance: negotiable -->`
+8. **Data Models** - entities with typed fields, relationships `<!-- contract: interface-immutable, implementation-negotiable -->`
+9. **API Contracts** - endpoints with request/response shapes and error codes `<!-- contract: interface-immutable, implementation-negotiable -->`
+10. **Edge Cases & Error Handling** - EC-NNN IDs, minimum 3, covering invalid input, empty state, concurrent access where applicable `<!-- contract: immutable -->`
+11. **Open Questions** - anything unresolved `<!-- status: unresolved -->`
+
+When generating the spec, include the contract marker as an HTML comment at the start of each section (right after the ## heading). Example:
+```markdown
+## Context
+<!-- contract: immutable -->
+Problem statement here...
+
+## Technical Design
+<!-- guidance: negotiable -->
+Architecture decisions here...
+```
 
 After generating, perform a self-review pass:
 - Check each section for gaps, ambiguity, and untestable requirements
