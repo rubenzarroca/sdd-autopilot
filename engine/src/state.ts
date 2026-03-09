@@ -63,6 +63,15 @@ export const AGENT_PERMISSIONS: Record<AgentId, TransitionEdge[]> = {
   "orchestrator": [
     { from: "awaiting_input", to: "draft" },             // restart spec from scratch
     { from: "blocked",        to: "implementing" },      // human resolved blocker
+    // ── Execution mode skip transitions ──────────────────────────
+    // Express mode (trivial): draft → implementing (skip specify/plan/tasks)
+    { from: "draft",          to: "implementing" },
+    // Light mode (low): specified → implementing (skip plan/tasks)
+    { from: "specified",      to: "implementing" },
+    // Express/Light: implementing → reviewing (skip verify — use haiku-validator gate instead)
+    { from: "implementing",   to: "reviewing" },
+    // Express/Light: reviewing → pr_created (orchestrator can approve directly via /code-review)
+    { from: "reviewing",      to: "pr_created" },
     // any→escalated handled via isEscalation special-case in transition()
   ],
 };

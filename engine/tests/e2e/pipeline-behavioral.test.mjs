@@ -273,6 +273,62 @@ describe('Pipeline Behavioral Test', () => {
     assert.ok(result.error.message.includes('circuit breaker') || result.error.message.includes('Circuit breaker'));
   });
 
+  it('should allow Express mode skip: draft -> implementing (orchestrator)', async () => {
+    const expressFeature = 'test-express-mode';
+    const statePath = join(projectPath, '.sdd', 'state.json');
+    const state = JSON.parse(readFileSync(statePath, 'utf-8'));
+    state.features[expressFeature] = {
+      state: 'draft',
+      spec_path: `specs/${expressFeature}/spec.md`,
+      transitions: [],
+      tasks: { 'TASK-001': { status: 'pending', completed_at: null } },
+      signals: [],
+      verification_attempts: 0,
+      review_attempts: 0,
+      fix_loop_attempts: 0,
+      fix_review_attempts: 0,
+    };
+    writeFileSync(statePath, JSON.stringify(state, null, 2));
+
+    const result = await handleTransition({
+      project_path: projectPath,
+      feature_id: expressFeature,
+      from_state: 'draft',
+      to_state: 'implementing',
+      agent_id: 'orchestrator',
+    });
+    assert.equal(result.success, true);
+    assert.equal(result.new_state, 'implementing');
+  });
+
+  it('should allow Light mode skip: specified -> implementing (orchestrator)', async () => {
+    const lightFeature = 'test-light-mode';
+    const statePath = join(projectPath, '.sdd', 'state.json');
+    const state = JSON.parse(readFileSync(statePath, 'utf-8'));
+    state.features[lightFeature] = {
+      state: 'specified',
+      spec_path: `specs/${lightFeature}/spec.md`,
+      transitions: [],
+      tasks: { 'TASK-001': { status: 'pending', completed_at: null } },
+      signals: [],
+      verification_attempts: 0,
+      review_attempts: 0,
+      fix_loop_attempts: 0,
+      fix_review_attempts: 0,
+    };
+    writeFileSync(statePath, JSON.stringify(state, null, 2));
+
+    const result = await handleTransition({
+      project_path: projectPath,
+      feature_id: lightFeature,
+      from_state: 'specified',
+      to_state: 'implementing',
+      agent_id: 'orchestrator',
+    });
+    assert.equal(result.success, true);
+    assert.equal(result.new_state, 'implementing');
+  });
+
   it('should emit metrics for pipeline phases', async () => {
     const now = new Date().toISOString();
     const phases = ['spec', 'plan', 'decompose', 'implement', 'verify', 'review', 'pr'];

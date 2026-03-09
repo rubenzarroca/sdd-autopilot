@@ -224,7 +224,45 @@ When a gate fails with `implementation_bug`:
 6. If gate fails again and attempts remain: repeat from step 2
 7. If max attempts exhausted: escalate to the user
 
-### Phase sequence
+### Execution modes (determined by triage)
+
+After triage completes, determine the execution mode based on the `complexity` field from the TRIAGE_RESULT:
+
+| Mode | Trigger | Phases executed | Skip transitions (orchestrator) |
+|------|---------|----------------|-------------------------------|
+| **Express** | `complexity = "trivial"` | triage → implement → verify-light → pr | `draft → implementing` (skip specify/plan/tasks) |
+| **Light** | `complexity = "low"` | triage → specify → implement → verify → pr | `specified → implementing` (skip plan/tasks) |
+| **Standard** | `complexity = "medium"` | All 8 phases, no pair review | Sequential (no skips) |
+| **Full** | `complexity = "high"` or `"critical"` | All 8 phases + pair review | Sequential (no skips) |
+
+**Express mode details:**
+- The `implementation-engine` receives the raw feature description directly (no spec, no plan, no tasks).
+- Create a single synthetic task in state.json: `{ "TASK-001": { "status": "pending", "completed_at": null } }` and set `active_feature` before transitioning `draft → implementing`.
+- The verify gate is a lightweight haiku-validator check (does it compile? do existing tests still pass?) — NOT the full verification-engine.
+- Review phase is skipped entirely. The orchestrator transitions `implementing → reviewing → pr_created` after verify passes.
+- Pair review is never invoked.
+
+**Light mode details:**
+- Spec is generated normally. Plan and tasks phases are skipped.
+- The `implementation-engine` receives the spec directly and implements without formal task decomposition.
+- Create a single synthetic task in state.json before transitioning `specified → implementing`.
+- Verify and review run normally but without pair review.
+
+**Standard mode details:**
+- All 8 phases run sequentially. Pair review (`opus-coach`) is NOT invoked.
+- This is the default mode for most features.
+
+**Full mode details:**
+- All 8 phases run sequentially. Pair review (`opus-coach`) IS invoked for specify, implement, and verify phases.
+- Consider suggesting `--pair-review` to the user for high-complexity features, but do NOT activate pair review automatically unless the user passes the flag.
+
+Log the selected mode:
+```
+sdd_log_event(project_path, feature_id, event_type="execution_mode_selected", phase="triage", agent_id="orchestrator",
+  data={ mode: "{express|light|standard|full}", complexity: "{triage_complexity}", feature_type: "{triage_feature_type}" })
+```
+
+### Phase sequence (Standard/Full mode)
 
 | # | Phase | Subagent | Model | State transition |
 |---|-------|----------|-------|-----------------|

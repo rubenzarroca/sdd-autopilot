@@ -1,6 +1,28 @@
 {
   "pipeline": "sdd-autopilot",
-  "version": "2.2",
+  "version": "2.3",
+  "execution_modes": {
+    "express": {
+      "trigger": "complexity == trivial",
+      "phases": ["triage", "implement", "verify", "pr"],
+      "notes": "No formal spec/plan/tasks. Implementation-engine receives feature description directly. Verify gate is haiku-validator (lightweight). Review is skipped."
+    },
+    "light": {
+      "trigger": "complexity == low",
+      "phases": ["triage", "specify", "implement", "verify", "pr"],
+      "notes": "Spec is generated but plan/tasks are skipped. Implementation-engine receives spec directly."
+    },
+    "standard": {
+      "trigger": "complexity == medium",
+      "phases": ["triage", "specify", "plan", "tasks", "implement", "verify", "review", "pr"],
+      "notes": "All phases except opus-coach pair review."
+    },
+    "full": {
+      "trigger": "complexity == high OR complexity == critical",
+      "phases": ["triage", "specify", "plan", "tasks", "implement", "verify", "review", "pr"],
+      "notes": "All phases including pair review. Consider suggesting --pair-review for opus-coach."
+    }
+  },
   "contracts": {
     "triage": {
       "agent": "haiku-analyst",
