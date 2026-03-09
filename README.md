@@ -63,7 +63,7 @@ Creates `.sdd/state.json` in your project root. Optional — `/sdd-auto:run` aut
 /sdd-auto:status
 ```
 
-Shows feature states, task progress, verification/review attempt counts, active signals.
+Shows feature states, task progress, verification/review attempt counts, active signals, and a Spec TL;DR (scope, key decisions, out of scope, risks) extracted from the generated spec.
 
 ## Requirements
 
