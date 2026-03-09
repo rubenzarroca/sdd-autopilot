@@ -82,6 +82,10 @@ Not produced:
 
 Before writing code that calls the Anthropic API or the MCP SDK, read the relevant snapshot in `docs/api-snapshots/` to verify method signatures, parameter names, and model strings. Key files: `models.md`, `thinking.md`, `tool-use.md`, `mcp-ts-sdk.md`. If the snapshot contradicts your training data, trust the snapshot.
 
+## External Documentation
+
+When you need documentation for external libraries (Supabase, Stripe, Vercel, Next.js, etc.), use context7 MCP tools if available (`resolve-library-id` + `get-library-docs`) to fetch live documentation. Do NOT rely on training data for API specifics — always verify with live docs when context7 is available.
+
 ## Spec Contract Rules
 
 - Sections marked `<!-- contract: immutable -->` are non-negotiable. Do NOT modify, reinterpret, or skip any FR, NFR, goal, or edge case defined in those sections.
