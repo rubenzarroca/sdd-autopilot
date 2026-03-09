@@ -583,19 +583,22 @@ export async function handleMemoryWrite(params: {
 
   // GAP-10: Extraction filter — validate content matches expected section patterns
   const extraction = validateExtractionFilter(params.content, params.section);
-  if (!extraction.valid && params.feature_id) {
-    const runDir = resolve(params.project_path, ".sdd", "runs", params.feature_id);
-    await mkdir(runDir, { recursive: true });
-    const signalsPath = join(runDir, "signals.jsonl");
-    const extractionWarning = {
-      signal_type: "extraction_filter_warning",
-      reason: extraction.reason,
-      section: params.section,
-      content_preview: params.content.slice(0, 100),
-      agent: params.agent ?? "unknown",
-      timestamp,
-    };
-    await appendFile(signalsPath, JSON.stringify(extractionWarning) + "\n", "utf-8");
+  if (!extraction.valid) {
+    if (params.feature_id) {
+      const runDir = resolve(params.project_path, ".sdd", "runs", params.feature_id);
+      await mkdir(runDir, { recursive: true });
+      const signalsPath = join(runDir, "signals.jsonl");
+      const extractionWarning = {
+        signal_type: "extraction_filter_warning",
+        reason: extraction.reason,
+        section: params.section,
+        content_preview: params.content.slice(0, 100),
+        agent: params.agent ?? "unknown",
+        timestamp,
+      };
+      await appendFile(signalsPath, JSON.stringify(extractionWarning) + "\n", "utf-8");
+    }
+    return { written: false, action: "rejected", reason: extraction.reason, timestamp, confidence: Math.max(0, Math.min(1, params.confidence ?? 0.5)) };
   }
 
   // GAP-02: Build provenance metadata comment
@@ -620,8 +623,9 @@ export async function handleMemoryWrite(params: {
   };
 
   if (params.scope === "project") {
-    // Initialize if not exists
+    // Initialize if not exists, then ensure all sections are present (covers legacy templates)
     mm.initProjectMemory("project", "");
+    mm.ensureProjectSections();
 
     if (params.section === "learned_patterns") {
       // GAP-01: Consolidation check
@@ -630,7 +634,7 @@ export async function handleMemoryWrite(params: {
 
       if (consolidation.action === "skip") {
         const result: Record<string, unknown> = { written: false, action: "skipped", reason: consolidation.reason, similarity_score: consolidation.similarity_score, timestamp, confidence };
-        if (!extraction.valid) result.extraction_warning = extraction.reason;
+
         return result;
       }
       if (consolidation.action === "update" && consolidation.targetIndex !== undefined) {
@@ -638,14 +642,13 @@ export async function handleMemoryWrite(params: {
         existing[consolidation.targetIndex] = contentWithProvenance;
         mm.replaceLearnedPatterns(existing.join("\n\n"));
         const result: Record<string, unknown> = { written: true, action: "updated", reason: consolidation.reason, similarity_score: consolidation.similarity_score, timestamp, confidence };
-        if (!extraction.valid) result.extraction_warning = extraction.reason;
+
         if (!sanitization.clean) result.sanitization_warnings = sanitization.warnings;
         return result;
       }
       // action === "create"
       mm.appendLearnedPatterns([contentWithProvenance], undefined, params.ttl ?? 15);
       const result: Record<string, unknown> = { written: true, action: "created", reason: consolidation.reason, similarity_score: consolidation.similarity_score, timestamp, confidence };
-      if (!extraction.valid) result.extraction_warning = extraction.reason;
       if (!sanitization.clean) result.sanitization_warnings = sanitization.warnings;
       return result;
     } else if (params.section === "run_history") {
@@ -665,7 +668,7 @@ export async function handleMemoryWrite(params: {
 
       if (consolidation.action === "skip") {
         const result: Record<string, unknown> = { written: false, action: "skipped", reason: consolidation.reason, similarity_score: consolidation.similarity_score, timestamp, confidence };
-        if (!extraction.valid) result.extraction_warning = extraction.reason;
+
         return result;
       }
       if (consolidation.action === "update" && consolidation.targetIndex !== undefined) {
@@ -677,7 +680,7 @@ export async function handleMemoryWrite(params: {
         );
         writeFileSync(mm.projectMemoryPath, updated, "utf-8");
         const result: Record<string, unknown> = { written: true, action: "updated", reason: consolidation.reason, similarity_score: consolidation.similarity_score, timestamp, confidence };
-        if (!extraction.valid) result.extraction_warning = extraction.reason;
+
         if (!sanitization.clean) result.sanitization_warnings = sanitization.warnings;
         return result;
       }
@@ -700,7 +703,7 @@ export async function handleMemoryWrite(params: {
 
       if (consolidation.action === "skip") {
         const result: Record<string, unknown> = { written: false, action: "skipped", reason: consolidation.reason, similarity_score: consolidation.similarity_score, timestamp, confidence };
-        if (!extraction.valid) result.extraction_warning = extraction.reason;
+
         return result;
       }
       if (consolidation.action === "update" && consolidation.targetIndex !== undefined) {
@@ -713,7 +716,7 @@ export async function handleMemoryWrite(params: {
         );
         writeFileSync(mm.userMemoryPath, updated, "utf-8");
         const result: Record<string, unknown> = { written: true, action: "updated", reason: consolidation.reason, similarity_score: consolidation.similarity_score, timestamp, confidence };
-        if (!extraction.valid) result.extraction_warning = extraction.reason;
+
         if (!sanitization.clean) result.sanitization_warnings = sanitization.warnings;
         return result;
       }
@@ -728,7 +731,6 @@ export async function handleMemoryWrite(params: {
   }
 
   const result: Record<string, unknown> = { written: true, action: "created", timestamp, confidence };
-  if (!extraction.valid) result.extraction_warning = extraction.reason;
   if (!sanitization.clean) {
     result.sanitization_warnings = sanitization.warnings;
   }

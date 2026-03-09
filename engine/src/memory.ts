@@ -67,13 +67,9 @@ const SECTION_PATTERNS: Record<string, RegExp[]> = {
     /\bconvention:/i,
   ],
   learned_patterns: [
-    /\bwhen\s+.+\bdo\b/i,
-    /\bcauses?\b/i,
-    /\bpattern:/i,
-    /\bif\s+.+\bthen\b/i,
-    /\bfixed\s+by\b/i,
-    /\bresolved\s+by\b/i,
-    /\bworkaround:/i,
+    /\b(?:when|if)\s+.+\b(?:then|do|must|should)\b/i,
+    /\b(?:pattern|cause|trigger|fix|workaround|resolved\s+by|fixed\s+by):/i,
+    /\b(?:because|causes|leads\s+to|results\s+in|prevents)\b/i,
   ],
 };
 SECTION_PATTERNS.cross_project_patterns = SECTION_PATTERNS.learned_patterns;
@@ -273,7 +269,14 @@ ${conventionsContent.trim()}
       return `<!-- PATTERN-${id}: ${tag} -->\n${p.trim()}`;
     }).join("\n\n");
     const body = existing.startsWith("(no patterns") ? newEntries : `${existing.trim()}\n\n${newEntries}`;
-    writeFileSync(this.projectMemoryPath, this.replaceSection(content, "Learned Patterns", body), "utf-8");
+    const result = this.replaceSection(content, "Learned Patterns", body);
+    if (!result.modified) {
+      // Section missing — append it and write
+      const withSection = content.trimEnd() + `\n\n## Learned Patterns\n${body}\n`;
+      writeFileSync(this.projectMemoryPath, withSection, "utf-8");
+    } else {
+      writeFileSync(this.projectMemoryPath, result.content, "utf-8");
+    }
   }
 
   appendRunHistory(entry: RunHistoryEntry): void {
@@ -286,7 +289,7 @@ ${conventionsContent.trim()}
       `<!-- RUN-${id}: ${entry.date} -->\n` +
       `feature=${entry.feature}  cost=${entry.cost}  fix_loops=${entry.fix_loops}  result=${entry.result}`;
     const body = existing.startsWith("(no runs") ? newEntry : `${existing.trim()}\n\n${newEntry}`;
-    writeFileSync(this.projectMemoryPath, this.replaceSection(content, "Run History", body), "utf-8");
+    writeFileSync(this.projectMemoryPath, this.replaceSection(content, "Run History", body).content, "utf-8");
   }
 
   appendCrossProjectPattern(pattern: string): void {
@@ -298,13 +301,13 @@ ${conventionsContent.trim()}
     const id = String(count + 1).padStart(3, "0");
     const newEntry = `<!-- XP-${id}: ${date} -->\n${pattern.trim()}`;
     const body = existing.startsWith("(no cross") ? newEntry : `${existing.trim()}\n\n${newEntry}`;
-    writeFileSync(this.userMemoryPath, this.replaceSection(content, "Cross-Project Patterns", body), "utf-8");
+    writeFileSync(this.userMemoryPath, this.replaceSection(content, "Cross-Project Patterns", body).content, "utf-8");
   }
 
   replaceLearnedPatterns(consolidated: string): void {
     if (!existsSync(this.projectMemoryPath)) return;
     const content = readFileSync(this.projectMemoryPath, "utf-8");
-    writeFileSync(this.projectMemoryPath, this.replaceSection(content, "Learned Patterns", consolidated.trim()), "utf-8");
+    writeFileSync(this.projectMemoryPath, this.replaceSection(content, "Learned Patterns", consolidated.trim()).content, "utf-8");
   }
 
   // ─── Retro history ────────────────────────────────────────────
@@ -325,7 +328,7 @@ ${conventionsContent.trim()}
       `<!-- RETRO-${id}: ${date}, ${cleanTag}, changes=${result.human_changes_count} -->\n` +
       `feature=${featureName}  delta="${result.delta_summary}"${learningLines}`;
     const body = existing.startsWith("(no retro") ? newEntry : `${existing.trim()}\n\n${newEntry}`;
-    writeFileSync(this.projectMemoryPath, this.replaceSection(content, "Retro History", body), "utf-8");
+    writeFileSync(this.projectMemoryPath, this.replaceSection(content, "Retro History", body).content, "utf-8");
   }
 
   // ─── Exploration log ──────────────────────────────────────────
@@ -348,7 +351,7 @@ ${conventionsContent.trim()}
       `metric: ${entry.metric}\n` +
       `proposal: ${entry.proposal}`;
     const body = existing.startsWith("(no exploration") ? newEntry : `${existing.trim()}\n\n${newEntry}`;
-    writeFileSync(this.userMemoryPath, this.replaceSection(content, "Exploration Log", body), "utf-8");
+    writeFileSync(this.userMemoryPath, this.replaceSection(content, "Exploration Log", body).content, "utf-8");
   }
 
   // (11.3) Append an agent observation to ## Agent Performance Log in user memory.
@@ -359,7 +362,7 @@ ${conventionsContent.trim()}
     const date = new Date().toISOString().slice(0, 10);
     const newEntry = `<!-- AGENT-NOTE: ${date} -->\nagent=${agent}: ${observation}`;
     const body = existing.startsWith("(no agent") ? newEntry : `${existing.trim()}\n\n${newEntry}`;
-    writeFileSync(this.userMemoryPath, this.replaceSection(content, "Agent Performance Log", body), "utf-8");
+    writeFileSync(this.userMemoryPath, this.replaceSection(content, "Agent Performance Log", body).content, "utf-8");
   }
 
   // ─── Decay ────────────────────────────────────────────────────
@@ -391,7 +394,7 @@ ${conventionsContent.trim()}
         block.replace(/<!-- PATTERN-\d+:/, `<!-- PATTERN-${String(idx++).padStart(3, "0")}:`),
       ).join("\n\n");
       const newBody = renumbered.trim() || "(no patterns learned yet)";
-      writeFileSync(this.projectMemoryPath, this.replaceSection(content, "Learned Patterns", newBody), "utf-8");
+      writeFileSync(this.projectMemoryPath, this.replaceSection(content, "Learned Patterns", newBody).content, "utf-8");
     }
 
     return removed;
@@ -419,7 +422,7 @@ ${conventionsContent.trim()}
     });
 
     if (expired > 0) {
-      writeFileSync(this.userMemoryPath, this.replaceSection(content, "Exploration Log", updated.join("\n\n")), "utf-8");
+      writeFileSync(this.userMemoryPath, this.replaceSection(content, "Exploration Log", updated.join("\n\n")).content, "utf-8");
     }
 
     return expired;
@@ -438,14 +441,30 @@ ${conventionsContent.trim()}
     return (nextHeaderMatch ? rest.slice(0, nextHeaderMatch.index) : rest).trim();
   }
 
-  private replaceSection(content: string, sectionName: string, newBody: string): string {
+  replaceSection(content: string, sectionName: string, newBody: string): { content: string; modified: boolean } {
     const headerRegex = new RegExp(`^## ${sectionName}\\s*$`, "m");
     const match = headerRegex.exec(content);
-    if (!match) return content;
+    if (!match) return { content, modified: false };
     const startIdx = match.index + match[0].length;
     const rest = content.slice(startIdx);
     const nextHeaderMatch = /^## /m.exec(rest);
     const endIdx = nextHeaderMatch ? startIdx + nextHeaderMatch.index : content.length;
-    return content.slice(0, startIdx) + "\n" + newBody + "\n\n" + content.slice(endIdx);
+    return { content: content.slice(0, startIdx) + "\n" + newBody + "\n\n" + content.slice(endIdx), modified: true };
+  }
+
+  // Ensure all expected sections exist in a memory file. Appends missing sections at the end.
+  ensureProjectSections(): void {
+    if (!existsSync(this.projectMemoryPath)) return;
+    const expected = ["Project Conventions", "Learned Patterns", "Run History", "Retro History"];
+    let content = readFileSync(this.projectMemoryPath, "utf-8");
+    let changed = false;
+    for (const section of expected) {
+      const headerRegex = new RegExp(`^## ${section}\\s*$`, "m");
+      if (!headerRegex.test(content)) {
+        content = content.trimEnd() + `\n\n## ${section}\n(no ${section.toLowerCase()} yet)\n`;
+        changed = true;
+      }
+    }
+    if (changed) writeFileSync(this.projectMemoryPath, content, "utf-8");
   }
 }
