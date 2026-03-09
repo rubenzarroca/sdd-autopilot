@@ -190,6 +190,28 @@ export class StateManager {
       }
     }
 
+    // ── Circuit breaker ─────────────────────────────────────────
+    // Block transitions when delta_check detected regression or thresholds were breached.
+    // This is a hard enforcement — even if the orchestrator-prompt ignores the abort signal,
+    // the state machine itself will refuse to advance.
+
+    const abortSignal = feature.signals.find(s =>
+      s.type === "ATTENTION_REQUIRED" &&
+      s.payload &&
+      (
+        (s.payload as Record<string, unknown>).circuit_breaker === true ||
+        String((s.payload as Record<string, unknown>).message ?? "").includes("max_fix_loops")
+      )
+    );
+
+    if (abortSignal && !isEscalation) {
+      return {
+        ok: false,
+        code: "CIRCUIT_BREAKER" as TransitionErrorCode,
+        reason: `Circuit breaker: ${String((abortSignal.payload as Record<string, unknown>).message ?? "delta_check returned abort. Fix loop diverging.")}`,
+      };
+    }
+
     // ── Apply transition ──────────────────────────────────────
     const now = new Date().toISOString();
     const isSelf = SELF_TRANSITION_STATES.has(toState) && fromState === toState;

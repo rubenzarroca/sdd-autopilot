@@ -237,6 +237,42 @@ describe('Pipeline Behavioral Test', () => {
     assert.equal(result.error.code, 'UNAUTHORIZED');
   });
 
+  it('should block transition when circuit breaker signal is active', async () => {
+    // Create a fresh feature for this test
+    const cbFeature = 'test-circuit-breaker';
+    const statePath = join(projectPath, '.sdd', 'state.json');
+    const state = JSON.parse(readFileSync(statePath, 'utf-8'));
+    state.features[cbFeature] = {
+      state: 'implementing',
+      spec_path: `specs/${cbFeature}/spec.md`,
+      transitions: [],
+      tasks: { 'task-1': { status: 'completed', completed_at: new Date().toISOString() } },
+      signals: [{
+        id: 'abort-signal-1',
+        type: 'ATTENTION_REQUIRED',
+        from_agent: 'orchestrator',
+        at: new Date().toISOString(),
+        payload: { message: 'delta_check returned abort. Fix loop diverging.', circuit_breaker: true },
+      }],
+      verification_attempts: 0,
+      review_attempts: 0,
+      fix_loop_attempts: 0,
+      fix_review_attempts: 0,
+    };
+    writeFileSync(statePath, JSON.stringify(state, null, 2));
+
+    const result = await handleTransition({
+      project_path: projectPath,
+      feature_id: cbFeature,
+      from_state: 'implementing',
+      to_state: 'verifying',
+      agent_id: 'verification-engine',
+    });
+    assert.equal(result.success, false);
+    assert.equal(result.error.code, 'CIRCUIT_BREAKER');
+    assert.ok(result.error.message.includes('circuit breaker') || result.error.message.includes('Circuit breaker'));
+  });
+
   it('should emit metrics for pipeline phases', async () => {
     const now = new Date().toISOString();
     const phases = ['spec', 'plan', 'decompose', 'implement', 'verify', 'review', 'pr'];

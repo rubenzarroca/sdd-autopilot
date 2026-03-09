@@ -109,7 +109,8 @@ export type TransitionErrorCode =
   | "ESCALATE"               // system cannot proceed, human required
   | "SPEC_GAP"               // spec missing info needed to continue
   | "TASK_BLOCKED"           // task cannot proceed, external dependency
-  | "DEPENDENCY_MISSING";    // required artifact or dependency absent
+  | "DEPENDENCY_MISSING"     // required artifact or dependency absent
+  | "CIRCUIT_BREAKER";       // delta_check abort or threshold breach — hard stop
 
 export type TransitionResult =
   | { ok: true;  from: FeatureState; to: FeatureState; agent: AgentId }
