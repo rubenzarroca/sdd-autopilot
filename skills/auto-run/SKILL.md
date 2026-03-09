@@ -466,7 +466,7 @@ Before executing the first task, the orchestrator MUST:
 1. Read `specs/{feature_id}/tasks.md` to get the task list (already parsed in step 0).
 2. Execute waves in order from step 0's analysis. For each wave: if the wave has **2+ tasks**, invoke `/orchestrating-agent-teams` to launch them as a parallel team — each teammate runs `implementation-engine` for one task. If the wave has a single task, launch `implementation-engine` directly (no team needed). For each task in the wave:
    a. Extract the task block from tasks.md
-   b. Launch `implementation-engine` with that task block + spec + plan + memory, pointing it at `worktree_path` (or `project_path` if `--skip-worktree`)
+   b. Launch `implementation-engine` with that task block + spec + plan + memory, pointing it at `worktree_path` (or `project_path` if `--skip-worktree`). Include in the brief: `"You MUST read all files in task.files and their imports BEFORE writing any code. Trust the source code over this brief if they conflict."`
    c. If pair_review is enabled for this stage: run opus-coach on the result
    d. The implementation-engine marks the task completed via `sdd_update_task` and logs via `sdd_transition(implementing→implementing)`. Verify task status is "completed" in state before moving to next task.
    Wait for all tasks in the wave to complete before starting the next wave.
@@ -749,12 +749,15 @@ Report to the user at these points:
  TOTAL       │ {total}  │ {tot}  │ {N}   │      │ {N} │ {avg}
 
  Score: {pipeline_score}/100 | First-pass: {first_pass_rate}%
+ Golden: {golden_score} (weighted avg, {runs_in_window} runs) | Delta: {delta} | Trend: {trend}
  Bottleneck: {slowest phase} ({reason})
  PR: {url}
 ═══════════════════════════════════════════════════
 ```
 
-Build this table from `metrics.jsonl` and `phase_confidence.json` in `.sdd/runs/{feature_id}/`. If a phase has no metrics (e.g. skipped by pattern), show "skip" in the Gate column
+Build this table from `metrics.jsonl` and `phase_confidence.json` in `.sdd/runs/{feature_id}/`. If a phase has no metrics (e.g. skipped by pattern), show "skip" in the Gate column.
+
+**Golden line**: populate from `golden_comparison` in the `sdd_compute_score` response. If `status: "insufficient_data"`, replace the Golden line with: `Golden: not enough data ({runs_in_window}/{window_size} runs) — showing absolute score only`
 
 ## PR phase details
 
@@ -841,22 +844,18 @@ After PR creation (or after pipeline termination if it did not reach PR):
      - Include `anomaly_context` in the retro analysis context.
    - If `is_anomaly: false` or `status: "insufficient_data"`: proceed normally. Pattern promotion is allowed.
 
-5. Conditionally call `mcp__sdd-autopilot__sdd_set_golden` if the pipeline score beats the current golden baseline:
-   ```
-   mcp__sdd-autopilot__sdd_set_golden(
-     project_path,
-     feature_id
-   )
-   ```
-   **When to call:**
-   - Read `golden_comparison` from the `sdd_compute_score` response (step 2):
-     - If `golden_comparison.status: "no_golden_set"` → always call `sdd_set_golden` (first golden baseline).
-     - If `golden_comparison.status: "meets_golden"` and `golden_comparison.current_score > golden_comparison.golden_score` → call `sdd_set_golden` (new high score).
-     - If `golden_comparison.status: "below_threshold"` or `current_score <= golden_score` → do NOT call. Log: "Score {pipeline_score} did not beat current golden {golden_score}".
+5. **Golden baseline** — no tool call needed. The golden is computed dynamically by `sdd_compute_score` (step 2) as a complexity-weighted moving average of the last N runs from `history.jsonl`.
 
-   **Handle the response:**
-   - If `success: true`: log to the user: "New golden baseline set: {pipeline_score} (feature: {feature_id})"
-   - If the tool returns an error: log the error but do not fail the pipeline.
+   Read `golden_comparison` from the `sdd_compute_score` response and log the result:
+
+   - If `golden_comparison.status: "insufficient_data"` → log: "Golden baseline: {message} (showing absolute score: {current_score})"
+   - If `golden_comparison.status: "meets_golden"` → log: "Score {current_score} (weighted: {weighted_score}) vs golden {golden_score} (delta: {delta}, trend: {trend})"
+   - If `golden_comparison.status: "below_threshold"` → log: "⚠️ Score {current_score} (weighted: {weighted_score}) below golden {golden_score} by {delta} (trend: {trend})"
+
+   **`sdd_set_golden` is deprecated** — do NOT call it. The golden baseline recalibrates automatically as runs complete.
+
+   **Complexity weighting**: each run's score is multiplied by its triage complexity before averaging:
+   `trivial=0.6, low=0.8, medium=1.0, high=1.2, critical=1.4`. This means a score of 80 on a `high` feature (weighted: 96) contributes more to the baseline than a 92 on a `trivial` feature (weighted: 55.2).
 
 6. **MANDATORY — this step must execute even if the pipeline failed, was escalated, or was interrupted.** The retro is the most valuable observability artifact when things go wrong.
 
@@ -939,7 +938,7 @@ After step 9 (sdd_memory_write), proceed to the Adaptive Run Close sequence.
      - `retro.json` → whether retro ran
   3. Determine what's missing:
      - **Missing phase metrics**: phases that completed (state progressed past them) but have no entry in `metrics.jsonl`. For each, emit metrics with `duration_ms: -1` (unknown) and `gate_result: "pass"` (inferred from state progression). Log `event_type: "metrics_recovered"`.
-     - **Missing post-pipeline**: if `summary.json` doesn't exist, execute post-pipeline steps 1-9 (run_summary, compute_score, detect_anomaly, set_golden, run_retro, inline retro analysis, META_LEARNING, memory_write).
+     - **Missing post-pipeline**: if `summary.json` doesn't exist, execute post-pipeline steps 1-9 (run_summary, compute_score, detect_anomaly, golden baseline (inline from compute_score), run_retro, inline retro analysis, META_LEARNING, memory_write).
      - **Missing Adaptive Run Close**: if retro exists but no evolutions/patterns were processed, execute the Adaptive Run Close sequence.
   4. Show the observability report (same format as completion).
   5. Show the Human Debrief.
@@ -1000,17 +999,19 @@ Continue to the specify phase (or the first non-skipped phase).
 
 ### ADAPTIVE RUN CLOSE
 
-Execute this sequence after the post-pipeline steps complete (steps 1-9: `sdd_get_run_summary` (includes threshold alerts), `sdd_compute_score`, `sdd_detect_anomaly`, `sdd_set_golden`, `sdd_run_retro`, inline retro analysis, META_LEARNING_HINT processing, `sdd_memory_write`). This section covers only the metacognition-specific steps.
+Execute this sequence after the post-pipeline steps complete (steps 1-9: `sdd_get_run_summary` (includes threshold alerts), `sdd_compute_score` (includes golden baseline), `sdd_detect_anomaly`, `sdd_run_retro`, inline retro analysis, META_LEARNING_HINT processing, `sdd_memory_write`). This section covers only the metacognition-specific steps.
 
 **Step 1 -- Update pattern outcomes (sdd_update_pattern):**
 
 For each pattern in the `applicable_patterns` list stored at run start:
 
-1. Read `pipeline_score` from `.sdd/runs/{feature_id}/summary.json`.
-2. Read `golden_score` from `.sdd/analytics/golden.json`. If no golden exists, compute `historical_mean` from `.sdd/analytics/history.jsonl` (average of all non-null `pipeline_score` values). Use whichever is available as `baseline`.
-3. Determine outcome:
-   - `pipeline_score >= baseline`: call with `outcome="success"`
-   - `pipeline_score < baseline * 0.9`: call with `outcome="failure"`
+1. Read `golden_comparison` from the `sdd_compute_score` response (post-pipeline step 2).
+2. Determine `baseline`:
+   - If `golden_comparison.status` is `"meets_golden"` or `"below_threshold"`: use `golden_comparison.golden_score` as `baseline`.
+   - If `golden_comparison.status` is `"insufficient_data"`: skip pattern outcome updates entirely (not enough data to judge).
+3. Use `golden_comparison.weighted_score` (not raw `pipeline_score`) for comparison:
+   - `weighted_score >= baseline`: call with `outcome="success"`
+   - `weighted_score < baseline * 0.9`: call with `outcome="failure"`
    - Between `baseline * 0.9` and `baseline`: skip (ambiguous zone, no update)
 4. For each pattern with a determined outcome:
    ```
@@ -1208,7 +1209,7 @@ Show only sections that have items. If no items in any category, show the "all c
 → {metric} z-score: {z_score} (expected ~{mean}, actual {value})
 
 📉 GOLDEN DEGRADATION
-→ Score {current_score} vs golden {golden_score} (delta: {delta})
+→ Score {current_score} (weighted: {weighted_score}) vs golden {golden_score} (delta: {delta}, trend: {trend}, window: {runs_in_window} runs)
 
 🧹 MEMORY SANITIZATION WARNINGS ({count})
 → {signal.content}

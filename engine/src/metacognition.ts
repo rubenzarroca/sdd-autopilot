@@ -98,56 +98,134 @@ function durationTrendScore(summary: RunSummary, history: RunSummary[]): number 
   return 20;                       // >30% slower
 }
 
-// ─── sdd_set_golden ─────────────────────────────────────────────
+// ─── sdd_set_golden (DEPRECATED — golden is now computed dynamically by sdd_compute_score) ───
 
 export async function handleSetGolden(params: {
   project_path: string;
   feature_id?: string;
 }): Promise<unknown> {
-  let featureId = params.feature_id;
+  return {
+    deprecated: true,
+    message:
+      "sdd_set_golden is deprecated. The golden baseline is now computed dynamically " +
+      "as a complexity-weighted moving average of the last N runs by sdd_compute_score. " +
+      "No manual golden setting is needed. Remove this call from your pipeline.",
+  };
+}
 
-  // If no feature_id, find the last completed run from history.jsonl
-  if (!featureId) {
-    const historyPath = resolve(params.project_path, ".sdd", "analytics", "history.jsonl");
-    if (!await fileExists(historyPath)) {
-      return { error: "No history.jsonl found and no feature_id provided." };
-    }
-    const raw = await readFile(historyPath, "utf-8");
-    const entries = parseJsonl<RunSummary>(raw);
-    if (entries.length === 0) {
-      return { error: "history.jsonl is empty and no feature_id provided." };
-    }
-    const last = entries[entries.length - 1];
-    featureId = last.feature_id ?? last.run_id;
-    if (!featureId) {
-      return { error: "Last history entry has no feature_id." };
-    }
+// ─── Golden baseline: complexity-weighted moving average ─────────
+
+const COMPLEXITY_MULTIPLIERS: Record<string, number> = {
+  trivial:  0.6,
+  low:      0.8,
+  medium:   1.0,
+  high:     1.2,
+  critical: 1.4,
+};
+
+const DEFAULT_GOLDEN_WINDOW = 5;
+const MIN_RUNS_FOR_BASELINE = 3;
+
+export interface GoldenComparison {
+  status:           "insufficient_data" | "meets_golden" | "below_threshold";
+  message?:         string;
+  golden_score?:    number;   // complexity-weighted moving average
+  current_score?:   number;   // raw pipeline_score of this run
+  weighted_score?:  number;   // current score × complexity multiplier (for fair comparison)
+  delta?:           number;   // weighted_score - golden_score
+  trend?:           "improving" | "degrading" | "stable";
+  window_size?:     number;   // configured N
+  runs_in_window?:  number;   // actual runs used (<= window_size)
+}
+
+/**
+ * Compute the golden baseline from history.jsonl as a complexity-weighted
+ * moving average of the last N completed runs.
+ *
+ * Each run's score is multiplied by its complexity weight before averaging:
+ *   weighted_avg = Σ(score_i × weight_i) / Σ(weight_i)
+ *
+ * Trend is determined by comparing the first half vs second half of the window.
+ */
+export function computeGoldenBaseline(
+  history: RunSummary[],
+  currentScore: number,
+  currentComplexity: string,
+  windowSize: number = DEFAULT_GOLDEN_WINDOW,
+): GoldenComparison {
+  // Only consider runs with a pipeline_score
+  const scored = history.filter(s => typeof s.pipeline_score === "number");
+
+  if (scored.length < MIN_RUNS_FOR_BASELINE) {
+    return {
+      status: "insufficient_data",
+      message: `Not enough data for baseline (${scored.length}/${MIN_RUNS_FOR_BASELINE} runs). Showing absolute score only.`,
+      current_score: currentScore,
+      runs_in_window: scored.length,
+      window_size: windowSize,
+    };
   }
 
-  const summaryPath = resolve(params.project_path, ".sdd", "runs", featureId, "summary.json");
-  if (!await fileExists(summaryPath)) {
-    return { error: `No summary.json found for feature "${featureId}".` };
+  // Take the last N runs for the window
+  const window = scored.slice(-windowSize);
+
+  // Compute complexity-weighted moving average
+  let sumWeightedScores = 0;
+  let sumWeights = 0;
+  for (const run of window) {
+    const mult = COMPLEXITY_MULTIPLIERS[run.complexity] ?? 1.0;
+    sumWeightedScores += (run.pipeline_score as number) * mult;
+    sumWeights += mult;
   }
+  const goldenScore = Math.round((sumWeightedScores / sumWeights) * 10) / 10;
 
-  const summary: RunSummary = JSON.parse(await readFile(summaryPath, "utf-8"));
+  // Compute the current run's weighted score for fair comparison
+  const currentMult = COMPLEXITY_MULTIPLIERS[currentComplexity] ?? 1.0;
+  const weightedCurrentScore = Math.round(currentScore * currentMult * 10) / 10;
 
-  if (summary.pipeline_score == null) {
-    return { error: `summary.json for "${featureId}" has no pipeline_score. Run sdd_compute_score first.` };
-  }
+  const delta = Math.round((weightedCurrentScore - goldenScore) * 10) / 10;
 
-  const goldenDir = resolve(params.project_path, ".sdd", "analytics");
-  await mkdir(goldenDir, { recursive: true });
-  const goldenPath = join(goldenDir, "golden.json");
+  // Trend: compare first half vs second half of the window
+  const trend = computeTrend(window);
 
-  const golden = { ...summary, golden_snapshot_at: new Date().toISOString() };
-  await writeFile(goldenPath, JSON.stringify(golden, null, 2), "utf-8");
+  const belowThreshold = weightedCurrentScore < goldenScore * 0.9;
 
   return {
-    success: true,
-    pipeline_score: summary.pipeline_score,
-    feature_id: featureId,
-    snapshot_at: golden.golden_snapshot_at,
+    status: belowThreshold ? "below_threshold" : "meets_golden",
+    golden_score: goldenScore,
+    current_score: currentScore,
+    weighted_score: weightedCurrentScore,
+    delta,
+    trend,
+    window_size: windowSize,
+    runs_in_window: window.length,
   };
+}
+
+function computeTrend(window: RunSummary[]): "improving" | "degrading" | "stable" {
+  if (window.length < 2) return "stable";
+
+  const mid = Math.floor(window.length / 2);
+  const firstHalf = window.slice(0, mid);
+  const secondHalf = window.slice(mid);
+
+  const avg = (runs: RunSummary[]) => {
+    let sum = 0, w = 0;
+    for (const r of runs) {
+      const mult = COMPLEXITY_MULTIPLIERS[r.complexity] ?? 1.0;
+      sum += (r.pipeline_score as number) * mult;
+      w += mult;
+    }
+    return w > 0 ? sum / w : 0;
+  };
+
+  const firstAvg = avg(firstHalf);
+  const secondAvg = avg(secondHalf);
+  const pctChange = firstAvg > 0 ? ((secondAvg - firstAvg) / firstAvg) * 100 : 0;
+
+  if (pctChange > 5) return "improving";
+  if (pctChange < -5) return "degrading";
+  return "stable";
 }
 
 // ─── sdd_compute_score ───────────────────────────────────────────
@@ -234,29 +312,14 @@ export async function handleComputeScore(params: {
     weights_used: weights,
   };
 
-  // Golden comparison
-  const goldenPath = resolve(params.project_path, ".sdd", "analytics", "golden.json");
-  let golden_comparison: { status: string; golden_score?: number; current_score?: number; delta?: number };
-
-  if (await fileExists(goldenPath)) {
-    try {
-      const golden = JSON.parse(await readFile(goldenPath, "utf-8"));
-      const goldenScore = golden.pipeline_score;
-      if (typeof goldenScore === "number") {
-        if (pipeline_score < goldenScore * 0.9) {
-          golden_comparison = { status: "below_threshold", golden_score: goldenScore, current_score: pipeline_score, delta: pipeline_score - goldenScore };
-        } else {
-          golden_comparison = { status: "meets_golden", golden_score: goldenScore, current_score: pipeline_score, delta: pipeline_score - goldenScore };
-        }
-      } else {
-        golden_comparison = { status: "no_golden_set" };
-      }
-    } catch {
-      golden_comparison = { status: "no_golden_set" };
-    }
-  } else {
-    golden_comparison = { status: "no_golden_set" };
-  }
+  // Golden comparison — dynamic complexity-weighted moving average from history
+  const goldenWindowSize = (weights as unknown as Record<string, unknown>).golden_window_size as number | undefined ?? DEFAULT_GOLDEN_WINDOW;
+  const golden_comparison: GoldenComparison = computeGoldenBaseline(
+    history,
+    pipeline_score,
+    summary.complexity ?? "medium",
+    goldenWindowSize,
+  );
 
   // Persist pipeline_score back into summary.json
   summary.pipeline_score = pipeline_score;

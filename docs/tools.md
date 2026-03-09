@@ -59,6 +59,6 @@ SDD Autopilot exposes 39 MCP tools organized into four categories. All tools are
 
 | Tool | Purpose |
 |------|---------|
-| `sdd_set_golden` | Set golden run benchmark; `sdd_compute_score` compares against it |
+| `sdd_set_golden` | @deprecated — Golden baseline now computed dynamically by `sdd_compute_score` as complexity-weighted moving average |
 | `sdd_get_manifest` | Get SHA-256 hash of tool definitions for version drift detection |
 | `sdd_breadcrumb` | Record subagent decision breadcrumbs for audit trail |

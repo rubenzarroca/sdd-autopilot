@@ -61,6 +61,35 @@ Features:
 
 5. If there's an active feature or a feature awaiting merge, show its transition history.
 
-6. If no features exist, report: "No features yet. Run `/sdd-auto:run \"feature description\"` to start."
+6. **Score & Golden baseline** — If `.sdd/analytics/history.jsonl` exists, read it and show the golden baseline section after the feature block (after the Spec TL;DR if present):
+
+   Read all entries from `history.jsonl`. For each entry with a non-null `pipeline_score`, collect `{ feature_id, pipeline_score, complexity }`.
+
+   **Complexity multipliers**: `trivial=0.6, low=0.8, medium=1.0, high=1.2, critical=1.4`
+
+   - If fewer than 3 scored runs exist:
+     ```
+     📊 Score History ({N} runs — not enough for baseline, need 3+):
+       {feature_id}: {pipeline_score}/100 ({complexity})
+       ...
+     ```
+
+   - If 3+ scored runs exist, compute the golden baseline as a complexity-weighted moving average of the last 5 runs (or all if fewer than 5):
+     - `golden = Σ(score_i × multiplier_i) / Σ(multiplier_i)`
+     - Trend: compare weighted avg of first half vs second half of the window. >5% improvement → "improving ↑", >5% drop → "degrading ↓", otherwise "stable →"
+     ```
+     📊 Score & Golden Baseline:
+       Last run: {feature_id} — {pipeline_score}/100 ({complexity})
+       Golden (weighted avg, {N} runs): {golden_score}
+       Delta: {delta} | Trend: {trend}
+       ─────────────
+       Recent runs:
+         {feature_id}: {score}/100 ({complexity}, weighted: {score × mult})
+         ...
+     ```
+
+   If `history.jsonl` doesn't exist, skip this section entirely.
+
+7. If no features exist, report: "No features yet. Run `/sdd-auto:run \"feature description\"` to start."
 
 $ARGUMENTS

@@ -72,7 +72,7 @@ Sub-scores:
 
 ## Golden Benchmarks
 
-Golden run benchmarks (`sdd_set_golden`) let `sdd_compute_score` compare the current run against a known-good baseline.
+The golden baseline is computed dynamically by `sdd_compute_score` as a complexity-weighted moving average of the last N completed runs from `history.jsonl` (N configurable, default 5, minimum 3 runs to activate). Each run's score is weighted by its triage complexity: `trivial=0.6, low=0.8, medium=1.0, high=1.2, critical=1.4`. `sdd_set_golden` is deprecated — no manual golden snapshot is needed.
 
 ## Breadcrumbs
 

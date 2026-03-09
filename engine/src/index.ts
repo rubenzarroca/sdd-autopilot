@@ -498,7 +498,9 @@ export const TOOLS = [
       "Compute the composite pipeline_score for a completed run. " +
       "Reads summary.json and analytics/history.jsonl, applies weighted formula (quality 70% / efficiency 30%), " +
       "persists pipeline_score back into summary.json. " +
-      "Loads score weights from .sdd/metacognition/score_weights.json if present, otherwise uses defaults. " +
+      "Golden baseline is computed dynamically as a complexity-weighted moving average of the last N runs " +
+      "(N configurable via golden_window_size in score_weights.json, default 5, minimum 3 runs to activate). " +
+      "Complexity multipliers: trivial=0.6, low=0.8, medium=1.0, high=1.2, critical=1.4. " +
       "Call after sdd_get_run_summary and after patching review_decision in summary.json.",
     inputSchema: {
       type: "object" as const,
@@ -532,6 +534,21 @@ export const TOOLS = [
           },
         },
         weights_used: { type: "object", description: "ScoreWeights that were applied", additionalProperties: true },
+        golden_comparison: {
+          type: "object",
+          description: "Dynamic golden baseline comparison (complexity-weighted moving average)",
+          properties: {
+            status:          { type: "string", enum: ["insufficient_data", "meets_golden", "below_threshold"] },
+            message:         { type: "string", description: "Human-readable status (shown when insufficient_data)" },
+            golden_score:    { type: "number", description: "Complexity-weighted moving average of last N runs" },
+            current_score:   { type: "number", description: "Raw pipeline_score of this run" },
+            weighted_score:  { type: "number", description: "Current score × complexity multiplier" },
+            delta:           { type: "number", description: "weighted_score - golden_score" },
+            trend:           { type: "string", enum: ["improving", "degrading", "stable"], description: "Direction based on first vs second half of window" },
+            window_size:     { type: "number", description: "Configured N (default 5)" },
+            runs_in_window:  { type: "number", description: "Actual runs used" },
+          },
+        },
         error:        { type: "string", description: "Error if summary.json not found or run_id mismatch" },
       },
     },
@@ -969,26 +986,23 @@ export const TOOLS = [
   {
     name: "sdd_set_golden",
     description:
-      "Set the golden run benchmark from a completed feature's summary. " +
-      "Copies summary.json to .sdd/analytics/golden.json. " +
-      "sdd_compute_score will compare future runs against this golden baseline.",
+      "@deprecated — Golden baseline is now computed dynamically by sdd_compute_score as a " +
+      "complexity-weighted moving average of the last N runs from history.jsonl. " +
+      "This tool is a no-op and will be removed in a future version. Do not call it.",
     inputSchema: {
       type: "object" as const,
       properties: {
         project_path: { type: "string", description: "Absolute path to the project root" },
-        feature_id: { type: "string", description: "Optional: feature to use as golden. Defaults to last completed run." },
+        feature_id: { type: "string", description: "Ignored (deprecated)" },
       },
       required: ["project_path"],
     },
     outputSchema: {
       type: "object" as const,
-      description: "Golden run benchmark result",
+      description: "Deprecation notice",
       properties: {
-        set:            { type: "boolean", description: "Whether the golden benchmark was set" },
-        golden_run_id:  { type: "string", description: "The run_id of the golden benchmark" },
-        golden_score:   { type: "number", description: "The pipeline_score of the golden run" },
-        golden_path:    { type: "string", description: "Path to the golden.json file" },
-        error:          { type: "string", description: "Error if summary not found" },
+        deprecated: { type: "boolean", description: "Always true" },
+        message:    { type: "string", description: "Deprecation message" },
       },
     },
   },

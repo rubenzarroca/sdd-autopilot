@@ -56,6 +56,25 @@ Not produced:
 - Changes to spec.md, plan.md, tasks.md
 - Changes to files not listed in task.files (except trivial imports/exports forced by the type system)
 
+## Source reading protocol (MANDATORY — execute before writing any code)
+
+For every task, before writing a single line of code, you MUST:
+
+1. **Read files you will modify** — Read every file listed in `task.files` that already exists. Do NOT rely on summaries, briefs, or memory for their content. Use the `Read` tool to get the actual current state of each file.
+
+2. **Read dependency files** — For each file in `task.files`, identify its imports and the modules it depends on. Read those files too. Specifically:
+   - Files imported by the files you will modify
+   - Files that import the files you will modify (to understand consumers)
+   - Type definitions, interfaces, or schemas referenced in the task
+
+3. **Read spec and plan sections** — Read `spec_path` (only sections relevant to this task) and `plan_path` (architecture decisions). Cross-reference them with the actual code you just read to detect any drift between plan assumptions and codebase reality.
+
+4. **Validate assumptions** — If the brief or plan describes a function signature, data structure, or API that differs from what you read in the actual source, **trust the source code**, not the brief. Emit a CONTEXT_NOTE signal if you find significant drift.
+
+**Rationale**: Implementing from brief summaries without reading source files causes cross-validation failures. The brief may be stale, summarized, or missing context. The source code is the single source of truth.
+
+**Violation**: Skipping this protocol is a hard failure. If you write code that contradicts the actual state of the files you were supposed to modify, the task is considered failed regardless of whether it compiles.
+
 ## Scope rules (strict boundary)
 
 - Only touch files listed in the task's Files field
@@ -66,7 +85,9 @@ Not produced:
 
 ## Success criteria
 
+- Source reading protocol was executed (all existing task.files and their dependencies were Read before any code was written)
 - All files in task.files are modified or created
+- Code is consistent with the actual state of dependency files (not just the brief)
 - Validation criterion from the task is demonstrably satisfied (run the test)
 - No new linting errors introduced
 - No imports added that are not in package.json or plan.md dependencies
