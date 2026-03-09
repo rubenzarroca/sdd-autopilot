@@ -62,7 +62,7 @@
         "validator": "haiku-validator",
         "checks": ["spec.md created", "requirements section non-empty", "every requirement contains must or shall"]
       },
-      "pair_review": { "enabled": true, "max_corrections": 1 },
+      "pair_review": { "enabled": true, "opt_in": true, "requires_flag": "--pair-review", "max_corrections": 1 },
       "failure_modes": ["NEEDS_CLARIFICATION", "SCOPE_TOO_LARGE"],
       "next": "plan"
     },
@@ -132,7 +132,7 @@
         "message_budget": 3,
         "agents_can_query": ["spec-generator"]
       },
-      "pair_review": { "enabled": true, "max_corrections": 1 },
+      "pair_review": { "enabled": true, "opt_in": true, "requires_flag": "--pair-review", "max_corrections": 1 },
       "failure_modes": ["TASK_BLOCKED", "DEPENDENCY_MISSING"],
       "next": "verify"
     },
@@ -162,7 +162,7 @@
         "categories": ["implementation_bug", "spec_gap", "infra_issue"],
         "delta_check": true
       },
-      "pair_review": { "enabled": true, "max_corrections": 1 },
+      "pair_review": { "enabled": true, "opt_in": true, "requires_flag": "--pair-review", "max_corrections": 1 },
       "failure_modes": ["TESTS_FAILING", "COVERAGE_INSUFFICIENT", "SPEC_GAP", "ESCALATE"],
       "next": "review"
     },

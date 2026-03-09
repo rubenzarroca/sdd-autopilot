@@ -110,11 +110,11 @@ For each phase:
 2. Call `mcp__sdd-autopilot__sdd_get_contract` for the current phase to get: required inputs, optional inputs, gate checks, pair_review config, fix_loop config
 3. Call `mcp__sdd-autopilot__sdd_memory_read` with the memory sections indicated by the contract's optional inputs
 4. Read ONLY the artifact files listed in the contract's `input.required` array. **NEVER use the Agent tool with Explore, NEVER call Read/Grep/Glob to "gather context" for a subagent.** Subagents have their own tools to discover what they need. The orchestrator's job is to pass contract inputs, not to pre-research the codebase.
-5. If the contract has `pair_review.enabled = true`:
+5. If the user passed `--pair-review` flag AND the contract has `pair_review.enabled = true`:
    a. Launch the phase's subagent with the prepared context
    b. Launch `opus-coach` with the produced artifact and the stage name
    c. If opus-coach feedback contains any "critical" severity finding: re-launch the phase subagent with the v1 artifact + feedback for correction
-6. If no pair_review: launch the subagent directly
+6. If no `--pair-review` flag or no pair_review in contract: launch the subagent directly
 7. Call `mcp__sdd-autopilot__sdd_evaluate_gate` with the produced artifacts
 8. If gate passed:
    - For phases with `gate.type = "mechanical"` or `"haiku-validator"`: call `mcp__sdd-autopilot__sdd_transition` to move to the next state
@@ -277,7 +277,7 @@ After triage completes, determine the execution mode based on the `complexity` f
 | **Express** | `complexity = "trivial"` | triage → implement → verify-light → pr | `draft → implementing` (skip specify/plan/tasks) |
 | **Light** | `complexity = "low"` | triage → specify → implement → verify → pr | `specified → implementing` (skip plan/tasks) |
 | **Standard** | `complexity = "medium"` | All 8 phases, no pair review | Sequential (no skips) |
-| **Full** | `complexity = "high"` or `"critical"` | All 8 phases + pair review | Sequential (no skips) |
+| **Full** | `complexity = "high"` or `"critical"` | All 8 phases (pair review if `--pair-review` flag) | Sequential (no skips) |
 
 **Express mode details:**
 - The `implementation-engine` receives the raw feature description directly (no spec, no plan, no tasks).
@@ -297,8 +297,8 @@ After triage completes, determine the execution mode based on the `complexity` f
 - This is the default mode for most features.
 
 **Full mode details:**
-- All 8 phases run sequentially. Pair review (`opus-coach`) IS invoked for specify, implement, and verify phases.
-- Consider suggesting `--pair-review` to the user for high-complexity features, but do NOT activate pair review automatically unless the user passes the flag.
+- All 8 phases run sequentially. Pair review (`opus-coach`) is only invoked if the user passes `--pair-review` flag.
+- For high-complexity features, suggest `--pair-review` to the user in the triage output, but do NOT activate it automatically.
 
 Log the selected mode:
 ```
@@ -1120,7 +1120,7 @@ This will:
 2. Generate a spec at `specs/health-check-endpoint/spec.md`
 3. Generate a plan at `specs/health-check-endpoint/plan.md` + ADR
 4. Decompose into tasks at `specs/health-check-endpoint/tasks.md`
-5. Implement all tasks (per-task, with pair review)
+5. Implement all tasks (per-task; pair review only if `--pair-review` flag)
 6. Run verification (tests, spec coverage, regression, constitution)
 7. Run code review via /code-review plugin (correctness, security, performance, maintainability, side effects)
 8. Create a PR with structured metadata
