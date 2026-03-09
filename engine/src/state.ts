@@ -71,6 +71,9 @@ export const AGENT_PERMISSIONS: Record<AgentId, TransitionEdge[]> = {
     // Review phase (all modes): orchestrator handles review via /code-review plugin
     { from: "reviewing",      to: "pr_created" },        // APPROVE
     { from: "reviewing",      to: "fix_review" },        // REQUEST_CHANGES
+    // Fallback: if implementation-engine forgot to transition after fix
+    { from: "fix_review",     to: "implementing" },
+    { from: "fix_loop",       to: "implementing" },
     // PR phase: orchestrator handles inline (no subagent)
     { from: "pr_created",     to: "merged" },
     // any→escalated handled via isEscalation special-case in transition()

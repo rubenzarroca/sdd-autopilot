@@ -330,11 +330,12 @@ When a gate fails with `implementation_bug`:
 
 1. Check the contract's `fix_loop.max_attempts` — do not exceed it
 2. Before each retry, call `mcp__sdd-autopilot__sdd_delta_check` to verify convergence. If it returns ABORT, stop the loop and escalate.
-3. Re-invoke the `implementation-engine` subagent with the findings as additional context. The **implementation-engine** owns the `fix_loop → implementing` transition — the orchestrator MUST NOT attempt this transition itself.
-4. Re-run the gate evaluation
-5. If gate passes: continue to next phase
-6. If gate fails again and attempts remain: repeat from step 2
-7. If max attempts exhausted: escalate to the user
+3. Re-invoke the `implementation-engine` subagent with the findings as additional context. The implementation-engine should call `sdd_transition(fix_loop → implementing)` itself.
+4. **Post-agent state check**: After the implementation-engine returns, call `sdd_get_state`. If state is still `fix_loop` (agent forgot to transition), the orchestrator calls `sdd_transition(fix_loop → implementing)` as fallback.
+5. Re-run the gate evaluation
+6. If gate passes: continue to next phase
+7. If gate fails again and attempts remain: repeat from step 2
+8. If max attempts exhausted: escalate to the user
 
 ### Review fix loop protocol (review failures → fix_review state)
 
@@ -360,12 +361,16 @@ When the review gate fails with `REQUEST_CHANGES` (state is now `fix_review`):
    - Spec: {spec_path}
    - Accumulated diff: {diff reference}
    ```
-   The **implementation-engine** owns the `fix_review → implementing` transition. The orchestrator MUST NOT call `sdd_transition(fix_review → implementing)` itself — that will return UNAUTHORIZED.
-5. After implementation-engine completes: re-run verification (implementing → verifying → reviewing).
-6. Re-run review gate.
-7. If review passes: continue to PR phase.
-8. If review fails again and attempts remain: repeat from step 2.
-9. If max attempts exhausted: escalate to the user.
+   The **implementation-engine** should call `sdd_transition(fix_review → implementing)` itself. However, agents sometimes complete without making the transition (context limits, silent failures).
+5. **Post-agent state check (mandatory)**: After the implementation-engine returns, call `sdd_get_state` and check the feature state:
+   - If state is `implementing`: the agent transitioned correctly. Proceed to step 6.
+   - If state is still `fix_review`: the agent forgot to transition. The orchestrator calls `sdd_transition(fix_review → implementing)` itself as fallback, then proceeds.
+   - If state is anything else: log the unexpected state and escalate.
+6. Re-run verification (implementing → verifying → reviewing).
+7. Re-run review gate.
+8. If review passes: continue to PR phase.
+9. If review fails again and attempts remain: repeat from step 2.
+10. If max attempts exhausted: escalate to the user.
 
 ### Worktree setup (after triage, before any artifact-producing phase)
 
