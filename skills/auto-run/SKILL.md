@@ -252,7 +252,7 @@ instead of generating manual instructions for the user.
 {list each service with key capabilities, e.g. "- supabase: run SQL migrations, manage tables, execute queries"}
 ```
 
-**Agents that receive neither** (haiku-triage, haiku-validator, opus-meta-reviewer, retro-analyst):
+**Agents that receive neither** (haiku-triage, haiku-validator, opus-meta-reviewer):
 
 No additional injection. These agents either already read constitution.md directly, only process metrics, or only execute mechanical operations.
 
@@ -779,12 +779,20 @@ After PR creation (or after pipeline termination if it did not reach PR):
 
    This step is optional and non-blocking. If no proposals exist, skip entirely.
 
-7. Run `haiku-analyst` in retro mode (compare first-pass diff with final diff). Provide these additional context inputs:
-   - `retro_path`: `.sdd/runs/{feature_id}/retro.json` (from step 6)
-   - `threshold_alerts`: critical/warning alerts (from step 3, if any)
-   - `anomaly_context`: anomaly details (from step 4, if `is_anomaly: true`)
-   - `is_anomalous_run`: boolean flag — if `true`, haiku-analyst must NOT emit `sdd_propose_pattern`, `sdd_promote_pattern`, or `sdd_propose_experiment` calls
-   The haiku-analyst may call `sdd_propose_pattern` to emit ExploitationPattern candidates and `sdd_propose_experiment` to propose an experiment (if this is an exploration turn -- `run_count % 5 == 0`). On anomalous runs, both are suppressed.
+7. **Retro analysis (inline — no subagent):**
+   Using the retro output from step 6 (`.sdd/runs/{feature_id}/retro.json`), threshold alerts (step 3), and anomaly context (step 4):
+
+   a. **Pattern management** (skip if `is_anomaly: true`):
+      - Call `mcp__sdd-autopilot__sdd_get_patterns` to check existing pattern candidates.
+      - If any candidate has `supporting_runs >= min_runs` threshold → call `mcp__sdd-autopilot__sdd_promote_pattern`.
+      - If this run evidences a new pattern (same behavior across >= 3 runs) → call `mcp__sdd-autopilot__sdd_propose_pattern` with `initial_confidence: 0.5`.
+      - Do NOT propose a pattern from a single run. Do NOT duplicate existing candidates.
+   b. **Exploration** (only if `run_count % 5 == 0` and no experiment is currently `status=proposed` or `running`):
+      - Identify highest-potential improvement target (worst-scoring phase, highest time cost, or untested configuration).
+      - Formulate a falsifiable hypothesis and call `mcp__sdd-autopilot__sdd_propose_experiment`.
+      - One experiment max per retro. Prefer low/medium risk.
+   c. Log the retro analysis via `sdd_log_event(event_type="retro_analysis", ...)` even if no pattern or experiment was emitted.
+
 8. Process buffered META_LEARNING_HINT signals
 9. Write learnings to memory via `sdd_memory_write`
 
