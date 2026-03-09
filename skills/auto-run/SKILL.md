@@ -145,6 +145,24 @@ For each phase:
      )
      ```
      This persists to `.sdd/runs/{feature_id}/phase_confidence.json` (upserts per feature+phase). The data feeds into `sdd_get_run_summary` (which computes `avg_confidence`) and `sdd_check_thresholds` (which alerts on low average confidence).
+   - **Verbose phase summary**: After each phase completes, output a human-readable summary to the terminal. Format:
+     ```
+     ✓ Phase {N}/{total} [{phase_name}] completed ({duration})
+       → {primary artifact produced, e.g. "Spec: specs/my-feature/spec.md"}
+       → {key metrics, e.g. "5 FRs, 2 NFRs, 3 edge cases, 1 open question"}
+       → Gate: {gate_type} {pass|fail} ✓ {optional: "(confidence: 0.92)"}
+     ```
+     Adapt the content line based on the phase:
+     - **triage**: `→ Mode: {express|light|standard|full}, Type: {feature_type}, Complexity: {complexity}`
+     - **specify**: `→ {N} FRs, {N} NFRs, {N} edge cases, {N} open questions`
+     - **plan**: `→ Plan: specs/{feature}/plan.md, ADR: docs/adr/NNN-*.md`
+     - **tasks**: `→ {N} tasks decomposed, {N} waves`
+     - **implement**: `→ {N}/{N} tasks completed, Files: {list of modified files}`
+     - **verify**: `→ Tests: {pass|fail}, Coverage: {summary}`
+     - **review**: `→ Verdict: {APPROVE|REQUEST_CHANGES}, Findings: {N} ({severity breakdown})`
+     - **pr**: `→ PR: {url}`
+
+     This summary is for the USER, not for logging. It goes to stdout, not to sdd_log_event.
    - For plan phase: call `mcp__sdd-autopilot__sdd_update_feature` to persist `plan_path` on the feature
    - For tasks phase:
      1. Call `mcp__sdd-autopilot__sdd_update_feature` to persist `tasks_path` on the feature
@@ -158,6 +176,32 @@ For each phase:
    - `spec_gap`: pause and communicate to the user; wait for input
    - `infra_issue`: escalate to the user with diagnosis
 10. Proceed to the next phase
+
+### Skill routing (by feature_type)
+
+After triage, if the `feature_type` from the TRIAGE_RESULT matches a known skill, instruct the relevant subagent to load it. This is injected into the subagent's prompt at spawn time (same mechanism as brief injection below).
+
+| feature_type | Skill to load | Inject into |
+|-------------|--------------|-------------|
+| `ui_component` | Read and apply design principles from the `frontend-design` skill. Use the Skill tool to invoke `/frontend-design` for design guidance. | implementation-engine |
+| `documentation` | If output is .docx, read and apply the `docx` skill. Use the Skill tool to invoke `/docx` for document generation. | implementation-engine |
+| `api_endpoint` | If context7 MCP is available, use `resolve-library-id` + `get-library-docs` tools for API documentation instead of relying on training data. | implementation-engine |
+| `refactor`, `bugfix`, `hotfix` | No additional skill routing. | — |
+
+**Implementation**: When spawning the `implementation-engine` for a matching feature_type, append to the Agent tool prompt:
+```
+## Skill Routing (from triage)
+Feature type: {feature_type}
+{Skill-specific instruction from the table above}
+```
+
+If `context7` MCP tools are available (detected in step 0c), also append to implementation-engine and verification-engine prompts:
+```
+## External Documentation (context7)
+When you need documentation for external libraries (Supabase, Stripe, Vercel,
+Next.js, etc.), use context7 MCP tools (resolve-library-id + get-library-docs)
+to fetch live documentation. Do NOT rely on training data for API specifics.
+```
 
 ### Brief injection
 
