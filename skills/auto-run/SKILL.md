@@ -21,10 +21,10 @@ When the feature is in a given state and work must be done, the orchestrator MUS
 
 | Current state | Agent to launch | Transition the agent owns | Context to pass |
 |---------------|----------------|--------------------------|----------------|
-| `draft` | `spec-generator` | draft → specified | feature description, PRD, constraints |
-| `specified` | `plan-architect` | specified → planned | spec.md, memory |
-| `planned` | `task-decomposer` | planned → decomposed | spec.md, plan.md |
-| `decomposed` | `implementation-engine` | decomposed → implementing | tasks.md, spec.md |
+| `draft` | `spec-generator` | draft → specified | feature description, PRD, constraints, `worktree_path` |
+| `specified` | `plan-architect` | specified → planned | spec.md, memory, `worktree_path` |
+| `planned` | `task-decomposer` | planned → decomposed | spec.md, plan.md, `worktree_path` |
+| `decomposed` | `implementation-engine` | decomposed → implementing | tasks.md, spec.md, `worktree_path` |
 | `implementing` | `implementation-engine` | implementing → implementing (self) | current task, spec.md |
 | `fix_loop` | `implementation-engine` | fix_loop → implementing | VERIFICATION_RESULT findings, spec.md, failing tests |
 | `fix_review` | `implementation-engine` | fix_review → implementing | REVIEW_RESULT findings (blocking issues only), spec.md, accumulated diff |
@@ -275,6 +275,8 @@ When spawning a subagent via the Agent tool, the orchestrator appends context se
 
 **Agents that receive PRD + constraints** (spec-generator, plan-architect, task-decomposer):
 
+All three agents receive `worktree_path` (or `project_path` if `--skip-worktree`) as their working directory. They write artifacts directly into `{worktree_path}/specs/{feature_id}/`.
+
 If `project_prd` is not null, append to the Agent tool prompt:
 ```
 ## Product Requirements (PRD)
@@ -365,6 +367,32 @@ When the review gate fails with `REQUEST_CHANGES` (state is now `fix_review`):
 8. If review fails again and attempts remain: repeat from step 2.
 9. If max attempts exhausted: escalate to the user.
 
+### Worktree setup (after triage, before any artifact-producing phase)
+
+Immediately after triage completes (and before selecting the execution mode), create the worktree so that **all artifact-producing phases** (specify, plan, tasks) write directly into it. This avoids copying artifacts between directories and prevents merge collisions.
+
+**Standard flow** (no `--skip-worktree`):
+
+1. Invoke the `/worktree-pr` skill via the `Skill` tool with command `start` in **automated mode** (all inputs provided, no confirmation prompts):
+   - `repo_path`: the project path
+   - `feature_name`: the feature ID (e.g. `health-check-endpoint`)
+   - This creates a sibling directory `../{repo-name}-feat-{feature-id}` on branch `feat/{feature-id}`
+2. Store the returned `worktree_path` and `branch_name` via `sdd_update_feature`:
+   ```
+   sdd_update_feature(project_path, feature_id, updates={ worktree_path: "...", branch: "feat/..." })
+   ```
+3. **From this point forward, ALL subagents receive `worktree_path` as their working directory** — including spec-generator, plan-architect, and task-decomposer. The artifacts (`specs/{feature_id}/spec.md`, `plan.md`, `tasks.md`) are created directly in the worktree, so they exist where implementation will happen.
+
+**If worktree creation fails** (e.g. git error, disk space, branch conflict):
+- Do NOT retry silently. Call `sdd_transition(current_state → escalated)` with `escalation_reason: "Worktree creation failed: {error}"`.
+- Report the error to the user.
+
+**If `--skip-worktree`**: mark the feature immediately after creation:
+```
+sdd_update_feature(project_path, feature_id, updates={ skip_worktree: true })
+```
+Then all subagents work directly in `project_path`. The state machine will accept transitions because `skip_worktree` is set.
+
 ### Execution modes (determined by triage)
 
 After triage completes, determine the execution mode based on the `complexity` field from the TRIAGE_RESULT:
@@ -437,40 +465,16 @@ These phases have `pair_review` enabled:
 
 The implement phase runs per-task, not as a single invocation:
 
-### Worktree setup (before first task) — HARD GATE
+### Worktree precondition check — HARD GATE
 
 **The state machine enforces a worktree precondition**: `sdd_transition` will reject any transition to `implementing` from `decomposed`, `draft`, or `specified` unless `worktree_path` or `skip_worktree` is set on the feature. This is not a soft instruction — the transition will return `PRECONDITION_FAILED` and the pipeline will stall.
 
-**Standard flow** (no `--skip-worktree`):
+The worktree was already created after triage (see "Worktree setup" above). At this point, artifacts already exist in the worktree because spec-generator, plan-architect, and task-decomposer wrote there directly. The orchestrator just needs to verify the precondition is met before calling `sdd_transition(decomposed → implementing)`.
 
-1. Invoke the `/worktree-pr` skill via the `Skill` tool with command `start` in **automated mode** (all inputs provided, no confirmation prompts):
-   - `repo_path`: the project path
-   - `feature_name`: the feature ID (e.g. `health-check-endpoint`)
-   - This creates a sibling directory `../{repo-name}-feat-{feature-id}` on branch `feat/{feature-id}`
-2. Store the returned `worktree_path` and `branch_name` via `sdd_update_feature`:
-   ```
-   sdd_update_feature(project_path, feature_id, updates={ worktree_path: "...", branch: "feat/..." })
-   ```
-3. **Sync artifacts from main repo to worktree, then remove from main repo** — the spec, plan, and tasks were created in the main repo during earlier phases and are NOT committed, so the worktree branch does not have them. Copy the entire `specs/{feature_id}/` directory, then delete the originals to prevent merge collisions when the PR is merged back:
-   ```bash
-   # Copy all artifacts to the worktree
-   cp -r "${project_path}/specs/${feature_id}" "${worktree_path}/specs/${feature_id}"
-   # Remove from main repo to avoid untracked file collision on merge
-   rm -rf "${project_path}/specs/${feature_id}"
-   ```
-   This syncs `spec.md`, `plan.md`, `tasks.md`, and any other files generated during specify/plan/decompose. The removal prevents the "untracked files would be overwritten by merge" error when the feature branch is merged and the main repo pulls. **If the copy fails, escalate** — implementation cannot proceed without artifacts. Only remove after confirming the copy succeeded.
-4. All subsequent subagents (implementation-engine, verification-engine) receive `worktree_path` as their working directory. The review phase uses `/code-review` plugin inline (no subagent).
-5. **Only after steps 2–3 succeed**, call `sdd_transition` to enter `implementing`. The transition will now pass the worktree precondition.
-
-**If worktree creation fails** (e.g. git error, disk space, branch conflict):
-- Do NOT retry silently. Call `sdd_transition(current_state → escalated)` with `escalation_reason: "Worktree creation failed: {error}"`.
-- Report the error to the user.
-
-**If `--skip-worktree`**: mark the feature immediately after creation:
+If for any reason `worktree_path` is not set (e.g. recovery from interrupted run), create it now following the same steps from "Worktree setup" and sync any artifacts that may exist in the main repo:
+```bash
+cp -r "${project_path}/specs/${feature_id}" "${worktree_path}/specs/${feature_id}" 2>/dev/null || true
 ```
-sdd_update_feature(project_path, feature_id, updates={ skip_worktree: true })
-```
-Then work directly in `project_path`. The state machine will accept the transition because `skip_worktree` is set.
 
 ### Per-task execution
 
