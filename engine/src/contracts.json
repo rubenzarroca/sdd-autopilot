@@ -200,8 +200,8 @@
       "next": "pr"
     },
     "pr": {
-      "agent": "pr-creator",
-      "model": "sonnet",
+      "agent": "orchestrator-inline",
+      "method": "git add/commit/push + gh pr create (no subagent needed)",
       "input": {
         "required": ["specs/{feature}/spec.md", "accumulated_diff", "REVIEW_RESULT"],
         "optional": [],

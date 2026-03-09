@@ -317,7 +317,7 @@ sdd_log_event(project_path, feature_id, event_type="execution_mode_selected", ph
 | 5 | Implement | `implementation-engine` (per task) | sonnet | `decomposed` -> `implementing` |
 | 6 | Verify | `verification-engine` | sonnet | `implementing` -> `verifying` -> `reviewing` |
 | 7 | Review | orchestrator-inline (`/code-review` plugin) | sonnet (5 parallel agents) | `reviewing` -> `pr_created` or `fix_review` |
-| 8 | PR | `worktree-pr finish` + `pr-creator` | sonnet | `pr_created` (PR opened) |
+| 8 | PR | orchestrator-inline (`worktree-pr finish` + git/gh commands) | — | `pr_created` (PR opened) |
 
 ### Pair review phases
 
@@ -650,18 +650,23 @@ Build this table from `metrics.jsonl` and `phase_confidence.json` in `.sdd/runs/
 
 ## PR phase details
 
-Phase 8 uses `worktree-pr finish` for git operations and `pr-creator` only for state tracking:
+Phase 8 is executed inline by the orchestrator (no subagent needed):
 
-1. If `--skip-worktree` or worktree was not created: delegate entirely to `pr-creator` subagent (current behavior).
-2. If worktree was created:
+1. If worktree was created:
    a. Invoke the `/worktree-pr` skill via the `Skill` tool with command `finish` in **automated mode**:
       - `worktree_path`: from `sdd_get_state` feature metadata (`worktree_path` field)
       - `title`: `"feat({feature-id}): {one-line summary from spec overview}"`
       - `description`: contents of `specs/{feature-id}/spec.md` (truncated to 60k chars if needed)
    b. `worktree-pr finish` commits all changes, pushes `feat/{feature-id}`, and opens the PR.
-   c. Record the result via `sdd_transition(pr_created→merged)` with metadata `{ pr_url, diff_stats }`.
+   c. Call `sdd_transition(pr_created→merged)` with metadata `{ pr_url, diff_stats }`.
+2. If `--skip-worktree` or worktree was not created:
+   a. `git add -A`
+   b. `git commit -m "feat({feature-id}): {feature_description}"`
+   c. `git push -u origin HEAD`
+   d. `gh pr create --title "[SDD] {feature_name}" --body "$(cat specs/{feature-id}/spec.md | head -50)" --label sdd-autopilot`
+   e. Call `sdd_transition(pr_created→merged)` with metadata `{ pr_url, diff_stats }`.
 
-If `--skip-pr` is set: skip step 2b (push + PR creation) but still commit in the worktree.
+If `--skip-pr` is set: skip push + PR creation but still commit.
 
 ## Post-pipeline
 
@@ -792,7 +797,7 @@ After step 9 (sdd_memory_write), proceed to the Adaptive Run Close sequence.
 
 ## Flags
 
-- `--skip-worktree`: Work directly in the project directory instead of creating a git worktree. Skips `worktree-pr start`, `finish`, and `cleanup`. pr-creator handles all git operations as before.
+- `--skip-worktree`: Work directly in the project directory instead of creating a git worktree. Skips `worktree-pr start`, `finish`, and `cleanup`. The orchestrator handles all git operations inline.
 - `--skip-pr`: Skip the PR creation step (useful for testing). Commits to worktree branch but does not push or open PR. Worktree cleanup is also skipped.
 - `--recover <feature_id>`: Manually resume an incomplete run (auto-recovery runs automatically at pipeline start, so this flag is only needed if you want to recover without starting a new feature). Recovery flow:
 

@@ -51,9 +51,8 @@ export const AGENT_PERMISSIONS: Record<AgentId, TransitionEdge[]> = {
   // adversarial-reviewer: DEPRECATED — review phase now handled by orchestrator via /code-review plugin
   // Transitions moved to orchestrator permissions below
   "adversarial-reviewer": [],
-  "pr-creator": [
-    { from: "pr_created",     to: "merged" },
-  ],
+  // pr-creator: DEPRECATED — PR phase now handled inline by orchestrator
+  "pr-creator": [],
   // haiku-validator: semantic gate checks only — no state transitions
   "haiku-validator": [],
   // orchestrator: resolves human-gate states and is the only one that can escalate.
@@ -72,6 +71,8 @@ export const AGENT_PERMISSIONS: Record<AgentId, TransitionEdge[]> = {
     // Review phase (all modes): orchestrator handles review via /code-review plugin
     { from: "reviewing",      to: "pr_created" },        // APPROVE
     { from: "reviewing",      to: "fix_review" },        // REQUEST_CHANGES
+    // PR phase: orchestrator handles inline (no subagent)
+    { from: "pr_created",     to: "merged" },
     // any→escalated handled via isEscalation special-case in transition()
   ],
 };
