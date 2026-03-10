@@ -92,4 +92,11 @@ Features:
 
 7. If no features exist, report: "No features yet. Run `/sdd-auto:run \"feature description\"` to start."
 
+## Error handling
+
+- If `state.json` does not exist or fails to parse as valid JSON: report "No SDD state found — file is missing or invalid. Run `/sdd-auto:init` first." and stop.
+- If `state.json` exists but has an unexpected schema (missing `features` key, wrong `version`): report "SDD state found but format is invalid (version: {version or 'unknown'}). Re-initialize with `/sdd-auto:init`."
+- If a feature's `spec_path` points to a file that does not exist on disk: skip the Spec TL;DR for that feature silently (already covered in step 4).
+- If `history.jsonl` exists but contains malformed JSON lines: skip those lines and compute from valid entries only. Report: "Warning: {N} malformed entries in history.jsonl were skipped."
+
 $ARGUMENTS
