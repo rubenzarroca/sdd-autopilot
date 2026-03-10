@@ -48,11 +48,6 @@ export const AGENT_PERMISSIONS: Record<AgentId, TransitionEdge[]> = {
     { from: "verifying",      to: "awaiting_input" },    // SPEC_GAP detected
     { from: "verifying",      to: "reviewing" },         // PASS
   ],
-  // adversarial-reviewer: DEPRECATED — review phase now handled by orchestrator via /code-review plugin
-  // Transitions moved to orchestrator permissions below
-  "adversarial-reviewer": [],
-  // pr-creator: DEPRECATED — PR phase now handled inline by orchestrator
-  "pr-creator": [],
   // haiku-validator: semantic gate checks only — no state transitions
   "haiku-validator": [],
   // orchestrator: resolves human-gate states and is the only one that can escalate.

@@ -64,7 +64,7 @@ Each pipeline run feeds a learning loop that adapts future runs.
 The score formula is stable across runs. Only `score_weights.json` is adjustable — and only by +/-0.05 per review cycle, with full audit trail.
 
 Sub-scores:
-- **review_result** — did the adversarial reviewer approve?
+- **review_result** — did the code review approve?
 - **findings** — number and severity of findings
 - **fix_loops** — how many fix iterations were needed
 - **phases_skipped** — phases that were skipped (e.g., triage)

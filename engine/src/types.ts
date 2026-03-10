@@ -27,8 +27,6 @@ export type AgentId =
   | "task-decomposer"
   | "implementation-engine"
   | "verification-engine"
-  | "adversarial-reviewer"
-  | "pr-creator"
   | "haiku-validator"
   | "orchestrator";
 

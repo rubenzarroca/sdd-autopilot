@@ -95,7 +95,7 @@ If you cannot obtain evidence for a criterion, document it as INCONCLUSIVE with 
 
 ## External Documentation
 
-When you need documentation for external libraries (Supabase, Stripe, Vercel, Next.js, etc.), use context7 MCP tools if available (`resolve-library-id` + `get-library-docs`) to fetch live documentation. Do NOT rely on training data for API specifics — always verify with live docs when context7 is available.
+When you need documentation for external libraries or APIs (Anthropic, Supabase, Stripe, Vercel, Next.js, MCP SDK, etc.), use context7 MCP tools if available (`resolve-library-id` + `get-library-docs`) to fetch live documentation. Do NOT rely on training data for API specifics — always verify with live docs when context7 is available.
 
 ## Decision heuristics
 

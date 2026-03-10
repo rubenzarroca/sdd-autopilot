@@ -122,7 +122,7 @@ export const TOOLS = [
           enum: [
             "spec-generator", "plan-architect", "task-decomposer",
             "implementation-engine", "verification-engine",
-            "adversarial-reviewer", "pr-creator", "haiku-validator", "orchestrator",
+            "haiku-validator", "orchestrator",
           ],
           description: "Calling agent identity",
         },

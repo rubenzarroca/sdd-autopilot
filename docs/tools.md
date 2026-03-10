@@ -2,7 +2,7 @@
 
 # MCP Tools Reference
 
-SDD Autopilot exposes 39 MCP tools organized into four categories. All tools are deterministic Node.js handlers — no LLM calls.
+SDD Autopilot exposes 38 MCP tools organized into four categories. All tools are deterministic Node.js handlers — no LLM calls.
 
 ## Core Pipeline (13 tools)
 

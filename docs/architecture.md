@@ -45,8 +45,8 @@ USER (Claude Code CLI)
 +------v--------v--------v--------v--------v--------v-----------+
 |              SUBAGENT LAYER  (.claude/agents/*.md)              |
 |                                                                |
-|  [0] haiku-analyst                                             |
-|      (triage + retro)                                          |
+|  [0] haiku-triage                                              |
+|      haiku (classify feature_type + complexity)                |
 |                                                                |
 |  [1] spec-generator --> [2] plan-architect --> [3] task-        |
 |      sonnet                  sonnet               decomposer   |
@@ -66,23 +66,19 @@ USER (Claude Code CLI)
 |        | SPEC_GAP -> [1]                                       |
 |        | PASS                                                  |
 |        v                                                       |
-|  [6] adversarial-reviewer                                      |
-|      opus . read-only                                          |
+|  [6] review  (orchestrator via /code-review plugin)            |
 |      produces: REVIEW_RESULT {decision,findings}               |
 |        | REQUEST_CHANGES -> [4]                                |
 |        | APPROVE                                               |
 |        v                                                       |
-|  [7] pr-creator                                                |
-|      sonnet . Bash (git + gh cli)                              |
+|  [7] pr  (orchestrator inline via /worktree-pr)                |
 |                                                                |
 |  [pair] opus-coach --- reviews artifacts on specify/           |
-|         opus           implement/verify stages                 |
+|         opus           implement/verify stages (opt-in)        |
 |                                                                |
 |  [meta] opus-meta-reviewer -- periodic pipeline evolution      |
 |         opus               -- proposes weight/structure        |
 |         spawned every N runs by the orchestrator               |
-|                                                                |
-|  haiku-analyst (retro mode)                                    |
 +----------------------------+----------------------------------+
                              |  mcp__sdd-autopilot__sdd_* tools
                              v
@@ -93,7 +89,7 @@ USER (Claude Code CLI)
 |              tasks.ts ---- observability.ts -- metacognition.ts |
 |              utils.ts (fileExists . parseJsonl)                 |
 |                                                                |
-|  39 tools (see docs/tools.md for full reference)               |
+|  38 tools (see docs/tools.md for full reference)               |
 +----------------------------+----------------------------------+
                              |  R/W
                              v
@@ -125,7 +121,7 @@ Defined in `contracts.json` (single source of truth):
 |  [3] tasks      sonnet     planned -> decomposed               |
 |  [4] implement  sonnet*N   decomposed -> implementing (per task)|
 |  [5] verify     sonnet     implementing -> verifying           |
-|  [6] review     opus       verifying -> reviewing              |
+|  [6] review     orchestrator  verifying -> reviewing            |
 |  [7] pr         sonnet     reviewing -> pr_created             |
 |                                                                |
 |  gate=mechanical:     orchestrator evaluates + transitions     |
@@ -160,17 +156,15 @@ sdd-autopilot/
 |
 +-- .claude/
 |   +-- agents/              # Native Claude Code subagents (operative)
+|       +-- haiku-triage.md
+|       +-- haiku-validator.md
 |       +-- spec-generator.md
 |       +-- plan-architect.md
 |       +-- task-decomposer.md
 |       +-- implementation-engine.md
 |       +-- verification-engine.md
-|       +-- adversarial-reviewer.md
-|       +-- opus-coach.md
-|       +-- opus-meta-reviewer.md  # Periodic pipeline evolution agent
-|       +-- haiku-analyst.md
-|       +-- haiku-validator.md
-|       +-- pr-creator.md
+|       +-- opus-coach.md            # Opt-in pair review
+|       +-- opus-meta-reviewer.md    # Periodic pipeline evolution
 |
 +-- skills/
 |   +-- auto-run/SKILL.md    # /sdd-auto:run -- pipeline orchestrator
@@ -196,8 +190,6 @@ sdd-autopilot/
 |   +-- tests/
 |   |   +-- e2e/             # Behavioral pipeline tests (20 tests)
 |   +-- test-e2e.mjs         # Mechanical tests (270+ assertions, no API calls)
-|   +-- docs/
-|   |   +-- GAP-09-READINESS.md  # Token & cost tracking readiness doc
 |   +-- scripts/
 |   |   +-- compute-tools-hash.mjs  # SHA-256 hash of tool definitions
 |   +-- tools-manifest.json  # Tool manifest for drift detection

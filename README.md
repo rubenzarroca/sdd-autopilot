@@ -8,18 +8,18 @@ Give it a feature description. Get back a reviewed PR.
 
 ```
 Feature description -> Triage -> Specify -> Plan -> Tasks -> Implement -> Verify -> Review -> PR
-                       haiku     sonnet     sonnet  sonnet   sonnet       sonnet    opus     sonnet
+                       haiku     sonnet     sonnet  sonnet   sonnet       sonnet    plugin   inline
 ```
 
-Sonnet handles the bulk work. Opus acts as the adversarial quality gate. Haiku runs triage and post-pipeline retrospectives. Each phase is a dedicated native Claude Code subagent — no direct API calls.
+Sonnet handles the bulk work. Haiku runs triage. Review uses the `/code-review` plugin. PR creation runs inline in the orchestrator. Each phase is a dedicated native Claude Code subagent — no direct API calls.
 
 ## Highlights
 
 - **Fully autonomous** — no human intervention from feature description to reviewed PR
 - **Adaptive learning** — observability layer records metrics; metacognition layer learns patterns across runs (80% exploitation / 20% exploration)
-- **39 MCP tools** — deterministic Node.js handlers for state, memory, gates, metrics, scoring, patterns, experiments, and evolution
+- **38 MCP tools** — deterministic Node.js handlers for state, memory, gates, metrics, scoring, patterns, experiments, and evolution
 - **No API key needed** — Claude Code handles all model invocations through its native agent system
-- **Quality gates** — adversarial Opus review (defaults to REJECT), delta checks on fix loops, z-score anomaly detection
+- **Quality gates** — `/code-review` plugin review, delta checks on fix loops, z-score anomaly detection, optional Opus pair review (`--pair-review`)
 
 ## Installation
 
@@ -77,7 +77,7 @@ Shows feature states, task progress, verification/review attempt counts, active 
 cd engine
 npm run build
 
-# Mechanical tests — all 39 tool handlers (270+ assertions)
+# Mechanical tests — all tool handlers (270+ assertions)
 node test-e2e.mjs
 
 # Behavioral pipeline tests — full lifecycle scenarios (20 tests)
@@ -87,7 +87,7 @@ npm run test:e2e
 ## Documentation
 
 - [Architecture](docs/architecture.md) — full architecture diagram, pipeline phases, state machine, file structure
-- [MCP Tools Reference](docs/tools.md) — all 39 tools across 4 categories
+- [MCP Tools Reference](docs/tools.md) — all 38 tools across 4 categories
 - [Observability & Metacognition](docs/observability.md) — scoring, patterns, experiments, evolution
 - [Memory Intelligence](docs/memory.md) — two-layer model, provenance, sanitization, consolidation
 - [Example Run](docs/examples/health-check-endpoint/) — real pipeline output (spec, plan, tasks, ADR, run log)

@@ -93,12 +93,13 @@ assert("planned -> decomposed (task-decomposer)", r.ok === true);
 r = await sm.transition("health-check", "implementing", "implementation-engine", "start impl");
 assert("decomposed -> implementing blocked (no tasks)", r.ok === false && r.code === "PRECONDITION_FAILED");
 
-// Add tasks
+// Add tasks + skip worktree for test environment
 const s2 = await sm.read();
 s2.features["health-check"].tasks = {
   "TASK-001": { status: "pending", title: "Create endpoint" },
   "TASK-002": { status: "pending", title: "Add tests" },
 };
+s2.features["health-check"].skip_worktree = true;
 await sm.write(s2);
 
 r = await sm.transition("health-check", "implementing", "implementation-engine", "start impl");
@@ -138,11 +139,11 @@ assert("verifying -> reviewing (PASS)", r.ok === true);
 f = await sm.getFeature("health-check");
 assert("review_attempts incremented to 1", f.review_attempts === 1);
 
-r = await sm.transition("health-check", "pr_created", "adversarial-reviewer", "APPROVE");
-assert("reviewing -> pr_created (adversarial-reviewer)", r.ok === true);
+r = await sm.transition("health-check", "pr_created", "orchestrator", "APPROVE");
+assert("reviewing -> pr_created (orchestrator)", r.ok === true);
 
-r = await sm.transition("health-check", "merged", "pr-creator", "merged");
-assert("pr_created -> merged (pr-creator)", r.ok === true);
+r = await sm.transition("health-check", "merged", "orchestrator", "merged");
+assert("pr_created -> merged (orchestrator)", r.ok === true);
 
 const finalState = await sm.read();
 assert("active_feature null after merge", finalState.active_feature === null);
@@ -359,7 +360,7 @@ assert("memory_read empty project returns empty content", h.content === "" || h.
 h = await handleMemoryWrite({
   project_path: projectPath,
   section: "learned_patterns",
-  content: "Always use async/await for file operations",
+  content: "When file operations fail, then must use async/await to handle errors properly",
   scope: "project",
 });
 assert("memory_write returns written:true", h.written === true);
@@ -510,7 +511,7 @@ h = await handleTransition({ project_path: projectPath, feature_id: HP, from_sta
 assert("happy path: verifying → reviewing (PASS)", h.success === true);
 
 // reviewing → pr_created (APPROVE)
-h = await handleTransition({ project_path: projectPath, feature_id: HP, from_state: "reviewing", to_state: "pr_created", agent_id: "adversarial-reviewer" });
+h = await handleTransition({ project_path: projectPath, feature_id: HP, from_state: "reviewing", to_state: "pr_created", agent_id: "orchestrator" });
 assert("happy path: reviewing → pr_created (APPROVE)", h.success === true);
 
 // final state check
@@ -631,7 +632,7 @@ h = await handleEmitMetrics({
     run_id:            RUN_ID,
     feature_id:        "obs-feature",
     phase:             "pr",
-    agent:             "pr-creator",
+    agent:             "orchestrator",
     model:             "sonnet",
     started_at:        "2026-03-05T10:05:10.000Z",
     completed_at:      "2026-03-05T10:05:30.000Z",
@@ -874,7 +875,7 @@ assert("compute_score pipeline < 70 for escalated run", h.pipeline_score < 70);
 writeSummary("score-critical", {
   phase_metrics: [{
     run_id: "score-critical-run1", feature_id: "score-critical", phase: "review",
-    agent: "adversarial-reviewer", model: "opus",
+    agent: "orchestrator", model: "opus",
     started_at: "2026-03-05T10:00:00.000Z", completed_at: "2026-03-05T10:02:00.000Z",
     duration_ms: 120000, tokens_in: null, tokens_out: null, tool_calls_count: 0,
     gate_result: "pass", gate_attempts: 1,
