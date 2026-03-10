@@ -1,0 +1,410 @@
+[
+  {
+    "name": "auto-init",
+    "type": "workflow",
+    "passed": true,
+    "total_score": 100,
+    "scores": {
+      "structure": 100,
+      "efficiency": 100,
+      "trigger": 100,
+      "clarity": 100,
+      "edge_cases": 100,
+      "completeness": 100
+    },
+    "findings": [
+      {
+        "severity": "info",
+        "category": "trigger",
+        "message": "Good trigger coverage (3 phrases)",
+        "location": "auto-init:frontmatter"
+      },
+      {
+        "severity": "info",
+        "category": "structure",
+        "message": "Has H1 title: # /sdd-auto:init \u2014 SDD Autopilot Initializer",
+        "location": "auto-init:body"
+      },
+      {
+        "severity": "info",
+        "category": "structure",
+        "message": "Has 2 H2 sections: What to do, Important notes",
+        "location": "auto-init:body"
+      },
+      {
+        "severity": "info",
+        "category": "structure",
+        "message": "Has workflow section: 'What to do'",
+        "location": "auto-init:body"
+      },
+      {
+        "severity": "info",
+        "category": "structure",
+        "message": "Has output format specification",
+        "location": "auto-init:body"
+      },
+      {
+        "severity": "info",
+        "category": "completeness",
+        "message": "Found 8 workflow steps",
+        "location": "auto-init:body"
+      },
+      {
+        "severity": "info",
+        "category": "edge_cases",
+        "message": "Good error handling coverage (6 mentions)",
+        "location": "auto-init:body"
+      },
+      {
+        "severity": "info",
+        "category": "edge_cases",
+        "message": "Scenario 'Project already initialized' \u2014 full coverage",
+        "location": "auto-init:edge_case"
+      },
+      {
+        "severity": "info",
+        "category": "edge_cases",
+        "message": "Scenario 'Node.js project detection' \u2014 full coverage",
+        "location": "auto-init:edge_case"
+      },
+      {
+        "severity": "info",
+        "category": "edge_cases",
+        "message": "Scenario 'Python project detection' \u2014 full coverage",
+        "location": "auto-init:edge_case"
+      },
+      {
+        "severity": "info",
+        "category": "edge_cases",
+        "message": "Scenario 'No stack detected' \u2014 full coverage",
+        "location": "auto-init:edge_case"
+      },
+      {
+        "severity": "info",
+        "category": "edge_cases",
+        "message": "Scenario 'CLAUDE.md already exists' \u2014 full coverage",
+        "location": "auto-init:edge_case"
+      },
+      {
+        "severity": "info",
+        "category": "edge_cases",
+        "message": "Scenario 'Specs directory creation' \u2014 full coverage",
+        "location": "auto-init:edge_case"
+      },
+      {
+        "severity": "info",
+        "category": "edge_cases",
+        "message": "Scenario 'Custom project path via arguments' \u2014 full coverage",
+        "location": "auto-init:edge_case"
+      },
+      {
+        "severity": "info",
+        "category": "clarity",
+        "message": "Step verbs: Determine, Check, Auto, Create, Create, Create, Create, Report",
+        "location": "auto-init:body"
+      },
+      {
+        "severity": "info",
+        "category": "clarity",
+        "message": "Has 10 code examples (json, , markdown)",
+        "location": "auto-init:body"
+      },
+      {
+        "severity": "info",
+        "category": "efficiency",
+        "message": "Body is 553 words \u2014 lean",
+        "location": "auto-init:body"
+      }
+    ]
+  },
+  {
+    "name": "auto-run",
+    "type": "workflow",
+    "passed": true,
+    "total_score": 100,
+    "scores": {
+      "structure": 100,
+      "efficiency": 100,
+      "trigger": 100,
+      "clarity": 100,
+      "edge_cases": 100,
+      "completeness": 100
+    },
+    "findings": [
+      {
+        "severity": "info",
+        "category": "trigger",
+        "message": "Good trigger coverage (3 phrases)",
+        "location": "auto-run:frontmatter"
+      },
+      {
+        "severity": "info",
+        "category": "structure",
+        "message": "Has H1 title: # /sdd-auto:run \u2014 SDD Autopilot Orchestrator",
+        "location": "auto-run:body"
+      },
+      {
+        "severity": "info",
+        "category": "structure",
+        "message": "Has 14 H2 sections: Reference files, State -> Agent delegation table, Transition error recovery, What to do, Pipeline phases, Execution modes (determined by triage)",
+        "location": "auto-run:body"
+      },
+      {
+        "severity": "info",
+        "category": "structure",
+        "message": "Has workflow section: 'What to do'",
+        "location": "auto-run:body"
+      },
+      {
+        "severity": "info",
+        "category": "structure",
+        "message": "Has dedicated error/edge case section",
+        "location": "auto-run:body"
+      },
+      {
+        "severity": "info",
+        "category": "completeness",
+        "message": "Found 16 workflow steps",
+        "location": "auto-run:body"
+      },
+      {
+        "severity": "info",
+        "category": "edge_cases",
+        "message": "Good error handling coverage (6 mentions)",
+        "location": "auto-run:body"
+      },
+      {
+        "severity": "info",
+        "category": "edge_cases",
+        "message": "Scenario 'Empty arguments' \u2014 full coverage",
+        "location": "auto-run:edge_case"
+      },
+      {
+        "severity": "info",
+        "category": "edge_cases",
+        "message": "Scenario 'Auto-initialize uninitialized project' \u2014 full coverage",
+        "location": "auto-run:edge_case"
+      },
+      {
+        "severity": "info",
+        "category": "edge_cases",
+        "message": "Scenario 'Auto-recover interrupted run' \u2014 full coverage",
+        "location": "auto-run:edge_case"
+      },
+      {
+        "severity": "info",
+        "category": "edge_cases",
+        "message": "Scenario 'Transition UNAUTHORIZED error' \u2014 full coverage",
+        "location": "auto-run:edge_case"
+      },
+      {
+        "severity": "info",
+        "category": "edge_cases",
+        "message": "Scenario 'Transition CIRCUIT_BREAKER error' \u2014 full coverage",
+        "location": "auto-run:edge_case"
+      },
+      {
+        "severity": "info",
+        "category": "edge_cases",
+        "message": "Scenario 'NEVER edit state.json directly' \u2014 full coverage",
+        "location": "auto-run:edge_case"
+      },
+      {
+        "severity": "info",
+        "category": "edge_cases",
+        "message": "Scenario 'Agent delegation correctness' \u2014 full coverage",
+        "location": "auto-run:edge_case"
+      },
+      {
+        "severity": "info",
+        "category": "edge_cases",
+        "message": "Scenario 'Pair review opt-in only' \u2014 full coverage",
+        "location": "auto-run:edge_case"
+      },
+      {
+        "severity": "info",
+        "category": "edge_cases",
+        "message": "Scenario 'PR merged cleanup' \u2014 full coverage",
+        "location": "auto-run:edge_case"
+      },
+      {
+        "severity": "info",
+        "category": "edge_cases",
+        "message": "Scenario 'Memory recovery for lost writes' \u2014 full coverage",
+        "location": "auto-run:edge_case"
+      },
+      {
+        "severity": "info",
+        "category": "edge_cases",
+        "message": "Scenario 'Review phase delegates to /code-review' \u2014 partial coverage (67%)",
+        "location": "auto-run:edge_case"
+      },
+      {
+        "severity": "info",
+        "category": "edge_cases",
+        "message": "Scenario 'Worktree path propagation' \u2014 full coverage",
+        "location": "auto-run:edge_case"
+      },
+      {
+        "severity": "info",
+        "category": "clarity",
+        "message": "Step verbs: Project, Parse, Determine, Auto, Auto, Check, Create, Execute",
+        "location": "auto-run:body"
+      },
+      {
+        "severity": "info",
+        "category": "clarity",
+        "message": "Has 2 code examples (json, )",
+        "location": "auto-run:body"
+      },
+      {
+        "severity": "info",
+        "category": "efficiency",
+        "message": "Body is 2215 words \u2014 lean",
+        "location": "auto-run:body"
+      }
+    ]
+  },
+  {
+    "name": "auto-status",
+    "type": "workflow",
+    "passed": true,
+    "total_score": 100,
+    "scores": {
+      "structure": 100,
+      "efficiency": 100,
+      "trigger": 100,
+      "clarity": 100,
+      "edge_cases": 100,
+      "completeness": 100
+    },
+    "findings": [
+      {
+        "severity": "info",
+        "category": "trigger",
+        "message": "Good trigger coverage (3 phrases)",
+        "location": "auto-status:frontmatter"
+      },
+      {
+        "severity": "info",
+        "category": "structure",
+        "message": "Has H1 title: # /sdd-auto:status \u2014 Show SDD Autopilot status",
+        "location": "auto-status:body"
+      },
+      {
+        "severity": "info",
+        "category": "structure",
+        "message": "Has 2 H2 sections: What to do, Error handling",
+        "location": "auto-status:body"
+      },
+      {
+        "severity": "info",
+        "category": "structure",
+        "message": "Has workflow section: 'What to do'",
+        "location": "auto-status:body"
+      },
+      {
+        "severity": "info",
+        "category": "structure",
+        "message": "Has dedicated error/edge case section",
+        "location": "auto-status:body"
+      },
+      {
+        "severity": "info",
+        "category": "structure",
+        "message": "Has output format specification",
+        "location": "auto-status:body"
+      },
+      {
+        "severity": "info",
+        "category": "completeness",
+        "message": "Found 1 workflow steps",
+        "location": "auto-status:body"
+      },
+      {
+        "severity": "info",
+        "category": "edge_cases",
+        "message": "Good error handling coverage (6 mentions)",
+        "location": "auto-status:body"
+      },
+      {
+        "severity": "info",
+        "category": "edge_cases",
+        "message": "Scenario 'No SDD state found' \u2014 partial coverage (67%)",
+        "location": "auto-status:edge_case"
+      },
+      {
+        "severity": "info",
+        "category": "edge_cases",
+        "message": "Scenario 'No features yet' \u2014 full coverage",
+        "location": "auto-status:edge_case"
+      },
+      {
+        "severity": "info",
+        "category": "edge_cases",
+        "message": "Scenario 'Active feature in progress' \u2014 full coverage",
+        "location": "auto-status:edge_case"
+      },
+      {
+        "severity": "info",
+        "category": "edge_cases",
+        "message": "Scenario 'Feature with PR awaiting merge' \u2014 full coverage",
+        "location": "auto-status:edge_case"
+      },
+      {
+        "severity": "info",
+        "category": "edge_cases",
+        "message": "Scenario 'Escalated feature' \u2014 full coverage",
+        "location": "auto-status:edge_case"
+      },
+      {
+        "severity": "info",
+        "category": "edge_cases",
+        "message": "Scenario 'Score history with <3 runs' \u2014 full coverage",
+        "location": "auto-status:edge_case"
+      },
+      {
+        "severity": "info",
+        "category": "edge_cases",
+        "message": "Scenario 'Score history with 3+ runs (golden baseline)' \u2014 full coverage",
+        "location": "auto-status:edge_case"
+      },
+      {
+        "severity": "info",
+        "category": "edge_cases",
+        "message": "Scenario 'Spec TL;DR extraction' \u2014 full coverage",
+        "location": "auto-status:edge_case"
+      },
+      {
+        "severity": "info",
+        "category": "edge_cases",
+        "message": "Scenario 'Missing spec file' \u2014 full coverage",
+        "location": "auto-status:edge_case"
+      },
+      {
+        "severity": "info",
+        "category": "edge_cases",
+        "message": "Scenario 'Complexity multipliers in golden' \u2014 full coverage",
+        "location": "auto-status:edge_case"
+      },
+      {
+        "severity": "info",
+        "category": "clarity",
+        "message": "Step verbs: Score",
+        "location": "auto-status:body"
+      },
+      {
+        "severity": "info",
+        "category": "clarity",
+        "message": "Has 8 code examples ()",
+        "location": "auto-status:body"
+      },
+      {
+        "severity": "info",
+        "category": "efficiency",
+        "message": "Body is 704 words \u2014 lean",
+        "location": "auto-status:body"
+      }
+    ]
+  }
+]
