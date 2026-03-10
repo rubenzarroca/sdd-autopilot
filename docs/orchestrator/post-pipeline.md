@@ -6,7 +6,7 @@ After PR creation (or after pipeline termination if it did not reach PR):
 
 ## Step 1 — Run summary
 
-Call `sdd_get_run_summary` with `project_path`, `feature_id`, and the `run_id`. This aggregates all PhaseMetrics into a RunSummary, persists `summary.json`, and appends to `analytics/history.jsonl`. After the call, patch `review_decision` in `summary.json` using the review agent's structured output.
+Call `sdd_get_run_summary` with `project_path`, `feature_id`, and the `run_id`. This aggregates all PhaseMetrics into a RunSummary, persists `summary.json` (merge-aware: preserves prior `review_decision` and `pipeline_score` on re-run), and appends to `analytics/history.jsonl`.
 
 **Write-on-generate — persist Run History to memory immediately:**
 ```
@@ -14,9 +14,16 @@ MEM_WRITE(section="run_history", content="Run {run_id} for '{feature_id}': phase
 ```
 This ensures the run entry is persisted even if later steps are lost to context compaction.
 
-## Step 2 — Compute score
+## Step 2 — Compute score + review decision
 
-Call `sdd_compute_score` with `project_path` and `feature_id`. Reads patched `summary.json` and `analytics/history.jsonl`, computes quality + efficiency scores, persists `pipeline_score` into `summary.json`.
+Call `sdd_compute_score` with `project_path`, `feature_id`, and `review_decision`. Pass the review decision from the code-review result:
+- If code-review ran: `review_decision="approve"` / `"request_changes"` / `"reject"`
+- If Express mode (no code-review): `review_decision=null`
+- If review was skipped for another reason: omit `review_decision` to preserve existing value
+
+This single call reads `summary.json`, computes quality + efficiency scores, patches both `pipeline_score` and `review_decision` atomically into `summary.json`.
+
+**Do NOT manually read/patch summary.json.** All writes go through MCP tools with atomic write protection.
 
 **Write-on-generate:**
 ```

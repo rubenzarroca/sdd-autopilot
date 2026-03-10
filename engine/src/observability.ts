@@ -2,7 +2,7 @@
 // Implements sdd_emit_metrics, sdd_get_run_summary, sdd_get_analytics
 // All deterministic — no LLM calls.
 
-import { readFile, writeFile, mkdir, appendFile } from "node:fs/promises";
+import { readFile, mkdir } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 import type { PhaseMetrics, RunSummary } from "./types.js";
-import { fileExists, parseJsonl } from "./utils.js";
+import { fileExists, parseJsonl, atomicWriteJSON, atomicAppendJSONL } from "./utils.js";
 import { StateManager } from "./state.js";
 
 // Fix loop caps from contracts.json — used by threshold checks
@@ -48,7 +48,7 @@ export async function handleEmitMetrics(params: {
   await mkdir(runDir, { recursive: true });
 
   const metricsPath = join(runDir, "metrics.jsonl");
-  await appendFile(metricsPath, JSON.stringify(params.metrics) + "\n", "utf-8");
+  await atomicAppendJSONL(metricsPath, params.metrics);
 
   return { emitted: true, run_id: params.metrics.run_id, phase: params.metrics.phase };
 }
@@ -150,15 +150,22 @@ export async function handleGetRunSummary(params: {
     phase_metrics:   metrics,
   };
 
-  // Persist summary.json
+  // Persist summary.json (merge-aware: preserve patches from prior writes)
   const summaryPath = resolve(params.project_path, ".sdd", "runs", params.feature_id, "summary.json");
-  await writeFile(summaryPath, JSON.stringify(summary, null, 2), "utf-8");
+  if (await fileExists(summaryPath)) {
+    try {
+      const prev: RunSummary = JSON.parse(await readFile(summaryPath, "utf-8"));
+      if (prev.review_decision != null) summary.review_decision = prev.review_decision;
+      if (prev.pipeline_score != null) summary.pipeline_score = prev.pipeline_score;
+    } catch { /* corrupted previous file — overwrite cleanly */ }
+  }
+  await atomicWriteJSON(summaryPath, summary);
 
   // Append to cross-run analytics history
   const analyticsDir = resolve(params.project_path, ".sdd", "analytics");
   await mkdir(analyticsDir, { recursive: true });
   const historyPath = join(analyticsDir, "history.jsonl");
-  await appendFile(historyPath, JSON.stringify(summary) + "\n", "utf-8");
+  await atomicAppendJSONL(historyPath, summary);
 
   // Fusion 2: include threshold alerts inline
   const thresholdResult = await handleCheckThresholds({
@@ -964,7 +971,7 @@ export async function handleBreadcrumb(params: {
   };
 
   const breadcrumbsPath = join(analyticsDir, "breadcrumbs.jsonl");
-  await appendFile(breadcrumbsPath, JSON.stringify(breadcrumb) + "\n", "utf-8");
+  await atomicAppendJSONL(breadcrumbsPath, breadcrumb);
 
   return { recorded: true, breadcrumb };
 }

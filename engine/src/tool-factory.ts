@@ -2,9 +2,9 @@
 // Self-evolution: sdd_propose_tool, sdd_review_tool_proposal, sdd_generate_tool_prompt
 // All deterministic — no LLM calls.
 
-import { readFile, writeFile, mkdir, appendFile } from "node:fs/promises";
+import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { resolve, join } from "node:path";
-import { fileExists } from "./utils.js";
+import { fileExists, atomicWriteJSON, atomicAppendJSONL } from "./utils.js";
 import { TOOLS } from "./index.js";
 import type { ToolProposal, ToolReviewResult, ToolPromptResult } from "./types.js";
 
@@ -77,7 +77,7 @@ export async function handleProposeTool(params: {
       feature_id,
     };
 
-    await writeFile(proposalPath, JSON.stringify(proposal, null, 2), "utf-8");
+    await atomicWriteJSON(proposalPath, proposal);
 
     return { success: true, proposal_path: proposalPath, status: "proposed" };
   } catch (err) {
@@ -154,7 +154,7 @@ export async function handleReviewToolProposal(params: {
       ? { type: "TOOL_PROPOSAL_READY", content: `${params.proposal_name}: ${proposal.description}`, timestamp: new Date().toISOString() }
       : { type: "TOOL_PROPOSAL_REJECTED", content: `${params.proposal_name} rejected: overlaps with ${overlappingTools.join(", ")}`, timestamp: new Date().toISOString() };
 
-    await appendFile(signalsPath, JSON.stringify(signal) + "\n", "utf-8");
+    await atomicAppendJSONL(signalsPath, signal);
 
     // Update proposal
     proposal.status = status;
@@ -167,7 +167,7 @@ export async function handleReviewToolProposal(params: {
       proposal.rejection_reason = reason;
     }
 
-    await writeFile(proposalPath, JSON.stringify(proposal, null, 2), "utf-8");
+    await atomicWriteJSON(proposalPath, proposal);
 
     const result: ToolReviewResult & { success?: boolean } = { status };
     if (reason) result.reason = reason;
@@ -243,7 +243,7 @@ export async function handleGenerateToolPrompt(params: {
 
     // Update proposal status
     proposal.status = "prompt_generated";
-    await writeFile(proposalPath, JSON.stringify(proposal, null, 2), "utf-8");
+    await atomicWriteJSON(proposalPath, proposal);
 
     return { success: true, prompt_path: promptPath };
   } catch (err) {

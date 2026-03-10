@@ -498,16 +498,18 @@ export const TOOLS = [
       "Compute the composite pipeline_score for a completed run. " +
       "Reads summary.json and analytics/history.jsonl, applies weighted formula (quality 70% / efficiency 30%), " +
       "persists pipeline_score back into summary.json. " +
+      "Optionally accepts review_decision to patch into summary.json atomically (replaces manual orchestrator patch). " +
       "Golden baseline is computed dynamically as a complexity-weighted moving average of the last N runs " +
       "(N configurable via golden_window_size in score_weights.json, default 5, minimum 3 runs to activate). " +
       "Complexity multipliers: trivial=0.6, low=0.8, medium=1.0, high=1.2, critical=1.4. " +
-      "Call after sdd_get_run_summary and after patching review_decision in summary.json.",
+      "Call after sdd_get_run_summary. Pass review_decision from the code-review result (or omit if no review ran).",
     inputSchema: {
       type: "object" as const,
       properties: {
-        project_path: { type: "string", description: "Absolute path to the project root" },
-        feature_id:   { type: "string", description: "Feature identifier" },
-        run_id:       { type: "string", description: "Optional: validate that summary.json matches this run_id" },
+        project_path:     { type: "string", description: "Absolute path to the project root" },
+        feature_id:       { type: "string", description: "Feature identifier" },
+        run_id:           { type: "string", description: "Optional: validate that summary.json matches this run_id" },
+        review_decision:  { type: ["string", "null"], enum: ["approve", "request_changes", "reject", null], description: "Review decision from code-review. Omit to preserve existing value. Pass null for Express mode (no review)." },
       },
       required: ["project_path", "feature_id"],
     },

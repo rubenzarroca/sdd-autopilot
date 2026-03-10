@@ -2,9 +2,10 @@
 // Feature as business entity: transition machine + agent boundaries + typed signals
 // Governance lives here (executable), not in prompts (ignorable).
 
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFile, mkdir } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
+import { atomicWriteJSON } from "./utils.js";
 import type {
   StateJson,
   FeatureState,
@@ -106,7 +107,7 @@ export class StateManager {
 
   async write(state: StateJson): Promise<void> {
     await mkdir(dirname(this.statePath), { recursive: true });
-    await writeFile(this.statePath, JSON.stringify(state, null, 2), "utf-8");
+    await atomicWriteJSON(this.statePath, state);
   }
 
   async init(projectName: string): Promise<StateJson> {

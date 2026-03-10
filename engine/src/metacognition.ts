@@ -3,10 +3,10 @@
 // Phases 3-5: sdd_get/propose/promote_pattern, sdd_propose/evaluate_experiment, sdd_propose_evolution
 // All deterministic — no LLM calls.
 
-import { readFile, writeFile, mkdir, appendFile } from "node:fs/promises";
+import { readFile, mkdir } from "node:fs/promises";
 import { resolve, join } from "node:path";
 import type { RunSummary, ScoreWeights, CompositeScore, ExploitationPattern, Experiment, PipelineEvolution, PhaseMetrics } from "./types.js";
-import { fileExists, parseJsonl } from "./utils.js";
+import { fileExists, parseJsonl, atomicWriteJSON } from "./utils.js";
 
 // ─── Generic metacognition JSON helpers ──────────────────────────
 
@@ -19,7 +19,7 @@ async function readMetacognitionJson<T>(projectPath: string, filename: string): 
 async function writeMetacognitionJson<T>(projectPath: string, filename: string, data: T[]): Promise<void> {
   const dir = resolve(projectPath, ".sdd", "metacognition");
   await mkdir(dir, { recursive: true });
-  await writeFile(resolve(dir, filename), JSON.stringify(data, null, 2), "utf-8");
+  await atomicWriteJSON(resolve(dir, filename), data);
 }
 
 // ─── Default weights (tokens_available=false — see docs/observability-native-capabilities.md)
@@ -230,11 +230,20 @@ function computeTrend(window: RunSummary[]): "improving" | "degrading" | "stable
 
 // ─── sdd_compute_score ───────────────────────────────────────────
 
+const VALID_REVIEW_DECISIONS = ["approve", "request_changes", "reject"] as const;
+
 export async function handleComputeScore(params: {
   project_path: string;
   feature_id:   string;
   run_id?:      string;
+  review_decision?: "approve" | "request_changes" | "reject" | null;
 }): Promise<unknown> {
+  // Validate review_decision if explicitly provided
+  if (params.review_decision !== undefined && params.review_decision !== null) {
+    if (!(VALID_REVIEW_DECISIONS as readonly string[]).includes(params.review_decision)) {
+      return { error: `Invalid review_decision "${params.review_decision}". Must be one of: ${VALID_REVIEW_DECISIONS.join(", ")}, or null.` };
+    }
+  }
   const summaryPath = resolve(
     params.project_path, ".sdd", "runs", params.feature_id, "summary.json"
   );
@@ -321,9 +330,12 @@ export async function handleComputeScore(params: {
     goldenWindowSize,
   );
 
-  // Persist pipeline_score back into summary.json
+  // Persist pipeline_score (and optionally review_decision) back into summary.json
   summary.pipeline_score = pipeline_score;
-  await writeFile(summaryPath, JSON.stringify(summary, null, 2), "utf-8");
+  if (params.review_decision !== undefined) {
+    summary.review_decision = params.review_decision;
+  }
+  await atomicWriteJSON(summaryPath, summary);
 
   // Ensure metacognition dir exists (score_weights.json lives here when Phase 5 writes it)
   const metacognitionDir = resolve(params.project_path, ".sdd", "metacognition");
@@ -805,7 +817,7 @@ export async function handleApproveEvolution(params: {
     const newWeights = { ...currentWeights, ...evo.supporting_data, updated_at: now, updated_by: evo.evolution_id };
     const metacogDir = resolve(params.project_path, ".sdd", "metacognition");
     await mkdir(metacogDir, { recursive: true });
-    await writeFile(weightsPath, JSON.stringify(newWeights, null, 2), "utf-8");
+    await atomicWriteJSON(weightsPath, newWeights);
 
     evo.status = "approved";
     evo.approved_at = now;
@@ -1144,7 +1156,7 @@ export async function handleRunRetro(params: {
 
   // Persist retro.json
   const retroPath = resolve(params.project_path, ".sdd", "runs", params.feature_id, "retro.json");
-  await writeFile(retroPath, JSON.stringify(retro, null, 2), "utf-8");
+  await atomicWriteJSON(retroPath, retro);
 
   return retro;
 }
@@ -1202,7 +1214,7 @@ export async function handlePhaseConfidence(params: {
     entries.push(entry);
   }
 
-  await writeFile(confPath, JSON.stringify(entries, null, 2), "utf-8");
+  await atomicWriteJSON(confPath, entries);
 
   return { persisted: true, ...entry };
 }

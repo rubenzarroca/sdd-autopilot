@@ -1,7 +1,7 @@
 // MCP Tool handlers — 11 sdd_* tools for the SDD Autopilot MCP server
 // All handlers are purely deterministic (no LLM calls).
 
-import { readFile, writeFile, mkdir, appendFile } from "node:fs/promises";
+import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { execSync } from "node:child_process";
@@ -12,7 +12,7 @@ import type { AgentId, FeatureState, PipelineContracts } from "./types.js";
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
-import { fileExists } from "./utils.js";
+import { fileExists, atomicAppendJSONL } from "./utils.js";
 
 // ─── Load contracts.json at startup ──────────────────────────────
 
@@ -447,7 +447,7 @@ export async function handleLogEvent(params: {
     data: params.data,
   };
 
-  await appendFile(logPath, JSON.stringify(entry) + "\n", "utf-8");
+  await atomicAppendJSONL(logPath, entry);
 
   // Fusion 5: when event_type is "decision", also write to breadcrumbs.jsonl
   if (params.event_type === "decision" && params.data) {
@@ -465,7 +465,7 @@ export async function handleLogEvent(params: {
     };
 
     const breadcrumbsPath = join(analyticsDir, "breadcrumbs.jsonl");
-    await appendFile(breadcrumbsPath, JSON.stringify(breadcrumb) + "\n", "utf-8");
+    await atomicAppendJSONL(breadcrumbsPath, breadcrumb);
   }
 
   return { logged: true, timestamp };
@@ -578,7 +578,7 @@ export async function handleMemoryWrite(params: {
       agent: params.agent ?? "unknown",
       timestamp,
     };
-    await appendFile(signalsPath, JSON.stringify(warning) + "\n", "utf-8");
+    await atomicAppendJSONL(signalsPath, warning);
   }
 
   // GAP-10: Extraction filter — validate content matches expected section patterns
@@ -596,7 +596,7 @@ export async function handleMemoryWrite(params: {
         agent: params.agent ?? "unknown",
         timestamp,
       };
-      await appendFile(signalsPath, JSON.stringify(extractionWarning) + "\n", "utf-8");
+      await atomicAppendJSONL(signalsPath, extractionWarning);
     }
     return { written: false, action: "rejected", reason: extraction.reason, timestamp, confidence: Math.max(0, Math.min(1, params.confidence ?? 0.5)) };
   }
@@ -934,7 +934,7 @@ export async function handleAppendSignal(params: {
     timestamp,
   };
 
-  await appendFile(signalsPath, JSON.stringify(entry) + "\n", "utf-8");
+  await atomicAppendJSONL(signalsPath, entry);
 
   return { appended: true, signal_id: signalId, in_state: stateResult.ok };
 }
