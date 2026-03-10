@@ -77,7 +77,60 @@ Before doing anything else, call `sdd_get_state` with the project path (no other
 - **If the tool exists but returns an error** (e.g. state.json not found):
   The MCP server is running. Continue — step 3 will auto-initialize the project.
 
-- **If the tool returns a valid state**: continue with step 0 below.
+- **If the tool returns a valid state**: show `✓ MCP connected | Project: {project_name}` and continue with step 0 below.
+
+## DX Output Protocol
+
+Apply these output rules to EVERY phase of the pipeline. This is how you communicate with the developer.
+
+**On pipeline start:**
+🚀 SDD Pipeline: "{feature_name}" | {mode} mode ({N} phases) | Branch: {branch}
+
+**After each phase completes (1 line, always):**
+✓ {N}/{total} [{phase_name}] ({duration}) — {one-line summary}
+
+Examples of good one-line summaries:
+- ✓ 1/6 [triage] (3s) — Standard mode, complexity: medium, type: api_endpoint
+- ✓ 2/6 [specify] (45s) — 5 FRs, 2 NFRs, 3 edge cases
+- ✓ 4/6 [implement] (2m 10s) — 7/7 tasks completed, 12 files modified
+- ✓ 5/6 [verify] (30s) — All tests pass, coverage 84%
+
+**Per-task progress during implement (1 line per task):**
+  → Task {N}/{total}: {task_title}... ✓ ({duration})
+
+**On fix loop (only when something fails, 1 extra line):**
+⟳ [{phase}] Fix attempt {N}/{max} — {what failed}
+
+**On pipeline complete:**
+✅ Pipeline complete ({total_duration}) — Score: {score}/100 | PR: {url}
+
+**On fatal error:**
+❌ Pipeline stopped at [{phase}] — {what happened}
+   → {what the developer should do next}
+
+Do NOT show internal details (signal names, JSON payloads, tool call parameters) unless the developer asks. Keep output human-readable, not machine-readable.
+
+### Error Translation
+
+When an MCP tool returns an error, NEVER show the raw JSON to the developer. Translate using these patterns:
+
+**Transition errors** (`ok: false, code`):
+- `PRECONDITION_FAILED` → ❌ Can't move to [{target}]: {reason}. {suggested_action}.
+- `INVALID_TRANSITION` → ❌ Invalid transition: {from} → {to}. Allowed: {allowed_transitions}.
+- `CIRCUIT_BREAKER` → ❌ Circuit breaker tripped on [{phase}] after repeated failures. Pipeline stopped. Review `.sdd/escalation/` for diagnosis.
+- `UNAUTHORIZED` → ❌ Agent not allowed to perform this transition. This is an orchestrator bug — report it.
+
+**Not-found errors** (`"X not found"`):
+- Feature → ❌ Feature "{X}" doesn't exist. Check the feature name or run `/sdd-auto:init`.
+- Pattern/Experiment → ❌ {type} "{X}" not found. Ignore if this is a first run.
+
+**File/data errors** (`"metrics.jsonl not found"`, `"summary.json not found"`):
+- → ❌ Missing {file}. A previous phase likely didn't complete. Re-run or check `.sdd/` directory.
+
+**Catch-all** (any error not matching above):
+- → ❌ Unexpected error: {message}. Check MCP server logs for details.
+
+Every error shown to the developer must: (1) start with ❌, (2) say WHAT happened, (3) say WHAT TO DO next. Never show JSON payloads, error codes, or internal field names.
 
 ## What to do
 
@@ -119,7 +172,7 @@ Before doing anything else, call `sdd_get_state` with the project path (no other
 
 7. **Execute the pipeline phases** in order (see below).
 
-8. **Communicate progress** to the user at each phase transition.
+8. Follow the **DX Output Protocol** above at every phase boundary.
 
 ## Pipeline phases
 
@@ -140,7 +193,7 @@ For each phase:
    - For `gate.type = "mechanical"` or `"haiku-validator"`: call `sdd_transition`
    - For `gate.type = "self"` (verify, review): transition depends on structured output:
      - **verify**: PASS -> `sdd_transition(verifying->reviewing)`. FAIL/SPEC_GAP -> step 9.
-     - **review**: invoke `/code-review` plugin (or haiku-validator fallback if the plugin is not available). If issues with confidence >= 80: FAIL -> `sdd_transition(reviewing->fix_review)` and enter review fix loop. If no high-confidence issues: PASS -> `sdd_transition(reviewing->pr_created)`.
+     - **review**: invoke `/code-review` plugin (or haiku-validator fallback if the plugin is not available). If issues with confidence >= 80: FAIL -> show findings before fix loop (`⚠️ Review: {N} findings ({severity breakdown})` + up to 3 one-line findings, rest as "+N more") -> `sdd_transition(reviewing->fix_review)` and enter review fix loop. If no high-confidence issues: PASS -> `sdd_transition(reviewing->pr_created)`.
    - Emit metrics and phase confidence — see `references/observability.md` for schemas
    - For plan phase: call `sdd_update_feature` to persist `plan_path`
    - For tasks phase: call `sdd_update_feature` to persist `tasks_path`, then register each task in `feature.tasks` (REQUIRED for `sdd_transition(decomposed->implementing)`)
@@ -238,7 +291,7 @@ Full: All 8 phases. Pair review only with `--pair-review` flag.
 1. Read `/orchestrating-agent-teams` skill
 2. Analyze DAG from `tasks.md`: parse dependencies, compute waves, check file ownership conflicts
 3. LOG with `event_type="parallelization_analysis"` — this is mandatory
-4. Display strategy to user
+4. Display strategy to user (follow the per-task progress format from the DX Output Protocol)
 
 **Steps 1-3 — Task execution**
 

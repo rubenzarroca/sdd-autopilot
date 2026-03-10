@@ -104,6 +104,10 @@ METRICS(metrics={
 
 ## Verbose phase summary
 
+> Note: The DX Output Protocol in auto-run/SKILL.md defines the mandatory output
+> format. The summaries below provide guidance on WHAT to include in the one-line
+> summary for each phase. The SKILL.md protocol defines HOW and WHEN to show it.
+
 After each phase completes, output a human-readable summary to the terminal:
 ```
 Phase {N}/{total} [{phase_name}] completed ({duration})

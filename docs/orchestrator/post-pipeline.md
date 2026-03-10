@@ -64,6 +64,8 @@ Read `golden_comparison` from the `sdd_compute_score` response and log:
 
 Call `sdd_run_retro(project_path, feature_id, expected_outcome="clean_pass"|"minor_fixes")`.
 
+After the retro completes, if there are noteworthy insights (bottleneck, anomaly, or actionable suggestion), include up to 2 lines in the completion report after the score line: `📝 Retro:` + `→ {insight}`. If the run was clean with no anomalies, omit the retro section entirely (progressive disclosure).
+
 **Write-on-generate:**
 ```
 MEM_WRITE(section="retro_learnings", content="Retro for run {run_id} ('{feature_id}'): outcome={outcome}, bottlenecks={bottlenecks}, suggestions_count={suggestions.length}, patterns_confirmed={patterns_confirmed.length}, patterns_contradicted={patterns_contradicted.length}")
