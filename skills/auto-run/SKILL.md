@@ -57,6 +57,28 @@ If `sdd_transition` returns an error:
 
 **NEVER edit state.json to bypass a failed transition.** The state machine in `state.ts` is the single source of truth. Direct edits bypass governance, skip precondition checks, and corrupt the audit trail. The only acceptable direct writes to state.json are: creating the initial feature entry and registering tasks after decomposition.
 
+## Preflight Check (MANDATORY, always first)
+
+Before doing anything else, call `sdd_get_state` with the project path (no other arguments).
+
+- **If the tool does not exist** (not available in current session):
+  STOP. Do not continue the pipeline. Show this message and exit:
+
+  > ❌ SDD MCP server not found.
+  >
+  > The SDD pipeline requires the MCP server to be running.
+  > Set it up with:
+  >
+  >     cd <plugin-path>/engine && npm run build
+  >     claude mcp add sdd-server -- node <plugin-path>/engine/build/index.js $(pwd)
+  >
+  > Then restart Claude Code and retry.
+
+- **If the tool exists but returns an error** (e.g. state.json not found):
+  The MCP server is running. Continue — step 3 will auto-initialize the project.
+
+- **If the tool returns a valid state**: continue with step 0 below.
+
 ## What to do
 
 0. **Project context loading** (once per run, before anything else):
