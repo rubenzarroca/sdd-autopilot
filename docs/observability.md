@@ -41,7 +41,7 @@ Each pipeline run feeds a learning loop that adapts future runs.
 |  |  sdd_promote_pattern |  |                            |   |
 |  |    (gate: >=5 runs,  |  |                            |   |
 |  |     confidence>=0.70)|  |                            |   |
-|  |  sdd_tick_patterns   |  |                            |   |
+|  |  sdd_tick_maintenance|  |                            |   |
 |  |    (TTL decay)       |  |                            |   |
 |  +----------------------+  +----------------------------+   |
 |                                                             |
@@ -72,15 +72,15 @@ Sub-scores:
 
 ## Golden Benchmarks
 
-The golden baseline is computed dynamically by `sdd_compute_score` as a complexity-weighted moving average of the last N completed runs from `history.jsonl` (N configurable, default 5, minimum 3 runs to activate). Each run's score is weighted by its triage complexity: `trivial=0.6, low=0.8, medium=1.0, high=1.2, critical=1.4`. `sdd_set_golden` is deprecated — no manual golden snapshot is needed.
+The golden baseline is computed dynamically by `sdd_compute_score` as a complexity-weighted moving average of the last N completed runs from `history.jsonl` (N configurable, default 5, minimum 3 runs to activate). Each run's score is weighted by its triage complexity: `trivial=0.6, low=0.8, medium=1.0, high=1.2, critical=1.4`. No manual golden snapshot tool is needed.
 
 ## Breadcrumbs
 
-Subagent breadcrumbs (`sdd_breadcrumb`) record decision points across the pipeline for post-run audit.
+Subagent breadcrumbs are recorded via `sdd_log_event` with `event_type='decision'` for post-run audit.
 
 ## Anomaly Detection
 
-Z-score anomaly detection (`sdd_detect_anomaly`) and threshold checks (`sdd_check_thresholds`) catch regressions automatically by comparing current metrics against historical distribution.
+Z-score anomaly detection (`sdd_detect_anomaly`) catches regressions automatically by comparing current metrics against historical distribution. Threshold alerts are included inline in `sdd_get_run_summary`.
 
 ## Exploitation vs Exploration
 

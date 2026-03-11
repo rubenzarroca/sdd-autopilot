@@ -37,7 +37,7 @@ USER (Claude Code CLI)
 |  5. sdd_log_event                                              |
 |  Post-pipeline: sdd_get_run_summary -> sdd_compute_score       |
 |                 haiku-analyst retro -> sdd_memory_write         |
-|                 sdd_tick_patterns -> sdd_tick_decay (TTL prune) |
+|                 sdd_tick_maintenance (patterns + memory TTL)    |
 |  Every N runs: opus-meta-reviewer -> sdd_propose_evolution     |
 +------+--------+--------+--------+--------+--------+-----------+
        |        |        |        |        |        |
@@ -89,7 +89,7 @@ USER (Claude Code CLI)
 |              tasks.ts ---- observability.ts -- metacognition.ts |
 |              utils.ts (fileExists . parseJsonl)                 |
 |                                                                |
-|  38 tools (see docs/tools.md for full reference)               |
+|  36 tools (see docs/tools.md for full reference)               |
 +----------------------------+----------------------------------+
                              |  R/W
                              v
@@ -177,7 +177,7 @@ sdd-autopilot/
 |
 +-- engine/                  # MCP server (TypeScript, stdio transport)
 |   +-- src/
-|   |   +-- index.ts         # Entry point -- 39 sdd_* tools registered
+|   |   +-- index.ts         # Entry point -- 36 sdd_* tools registered
 |   |   +-- handlers.ts      # Core deterministic tool handlers
 |   |   +-- state.ts         # StateManager + AGENT_PERMISSIONS governance
 |   |   +-- memory.ts        # Two-layer memory (project + user scope)

@@ -54,7 +54,7 @@ Read `golden_comparison` from the `sdd_compute_score` response and log:
 - `"meets_golden"` -> "Score {current_score} (weighted: {weighted_score}) vs golden {golden_score} (delta: {delta}, trend: {trend})"
 - `"below_threshold"` -> "Warning: Score {current_score} below golden {golden_score} by {delta}"
 
-**`sdd_set_golden` is deprecated** — do NOT call it.
+Golden baseline is computed dynamically by `sdd_compute_score` — no separate tool call needed.
 
 **Complexity weighting**: `trivial=0.6, low=0.8, medium=1.0, high=1.2, critical=1.4`.
 

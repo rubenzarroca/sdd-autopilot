@@ -11,9 +11,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 import type { PhaseMetrics, RunSummary } from "./types.js";
 import { fileExists, parseJsonl, atomicWriteJSON, atomicAppendJSONL } from "./utils.js";
-import { StateManager } from "./state.js";
 
-// Fix loop caps from contracts.json — used by threshold checks
+// Fix loop caps from contracts.json — used by inline threshold checks in run_summary
 const FIX_LOOP_CAPS: Record<string, number> = (() => {
   try {
     const contractsPath = resolve(__dirname, "contracts.json");
@@ -25,9 +24,54 @@ const FIX_LOOP_CAPS: Record<string, number> = (() => {
     }
     return caps;
   } catch {
-    return { verify: 3, review: 2 }; // fallback
+    return { verify: 3, review: 2 };
   }
 })();
+
+// ─── Metrics validation (internal) ────────────────────────────────
+
+const REQUIRED_FIELDS: Record<string, string> = {
+  run_id: "string", feature_id: "string", phase: "string", agent: "string",
+  model: "string", started_at: "string", completed_at: "string", duration_ms: "number",
+  gate_result: "string", gate_attempts: "number", findings_count: "number", fix_loop_count: "number",
+};
+const OPTIONAL_FIELDS: Record<string, string> = {
+  tokens_in: "number", tokens_out: "number", tool_calls_count: "number",
+  delta_direction: "string", feature_type: "string", complexity: "string",
+};
+const GATE_RESULT_VALUES = new Set(["pass", "fail", "skip"]);
+
+function validateMetrics(m: Record<string, unknown>): { valid: boolean; errors: Array<{ field: string; message: string }>; warnings: Array<{ field: string; message: string }> } {
+  const errors: Array<{ field: string; message: string }> = [];
+  const warnings: Array<{ field: string; message: string }> = [];
+  for (const [field, expectedType] of Object.entries(REQUIRED_FIELDS)) {
+    if (!(field in m)) { errors.push({ field, message: `Required field "${field}" is missing` }); continue; }
+    const val = m[field];
+    if (val === null || val === undefined) errors.push({ field, message: `Required field "${field}" is null/undefined` });
+    else if (typeof val !== expectedType) errors.push({ field, message: `Expected ${expectedType}, got ${typeof val}` });
+  }
+  for (const [field, expectedType] of Object.entries(OPTIONAL_FIELDS)) {
+    if (field in m && m[field] !== null && m[field] !== undefined && typeof m[field] !== expectedType)
+      errors.push({ field, message: `Expected ${expectedType} or null, got ${typeof m[field]}` });
+  }
+  if (typeof m.gate_result === "string" && !GATE_RESULT_VALUES.has(m.gate_result))
+    errors.push({ field: "gate_result", message: `Invalid value "${m.gate_result}". Expected: pass, fail, skip` });
+  for (const tsField of ["started_at", "completed_at"]) {
+    if (typeof m[tsField] === "string" && isNaN(new Date(m[tsField] as string).getTime()))
+      errors.push({ field: tsField, message: `Invalid ISO8601 timestamp: "${m[tsField]}"` });
+  }
+  for (const numField of ["duration_ms", "gate_attempts", "findings_count", "fix_loop_count", "tokens_in", "tokens_out", "tool_calls_count"]) {
+    if (numField in m && typeof m[numField] === "number" && (m[numField] as number) < 0)
+      errors.push({ field: numField, message: `Value must be non-negative, got ${m[numField]}` });
+  }
+  if ("findings_severity" in m) {
+    if (!Array.isArray(m.findings_severity)) errors.push({ field: "findings_severity", message: `Expected array, got ${typeof m.findings_severity}` });
+    else for (const s of m.findings_severity as unknown[]) { if (typeof s !== "string") { errors.push({ field: "findings_severity", message: `Array element must be string, got ${typeof s}` }); break; } }
+  }
+  const knownFields = new Set([...Object.keys(REQUIRED_FIELDS), ...Object.keys(OPTIONAL_FIELDS), "findings_severity"]);
+  for (const key of Object.keys(m)) { if (!knownFields.has(key)) warnings.push({ field: key, message: `Unknown field "${key}" — will be persisted but not used` }); }
+  return { valid: errors.length === 0, errors, warnings };
+}
 
 // ─── sdd_emit_metrics ────────────────────────────────────────────
 
@@ -35,13 +79,9 @@ export async function handleEmitMetrics(params: {
   project_path: string;
   metrics: PhaseMetrics;
 }): Promise<unknown> {
-  // Fusion 3: validate metrics before writing
-  const validation = await handleValidateMetrics({
-    project_path: params.project_path,
-    metrics: params.metrics as unknown as Record<string, unknown>,
-  });
-  if (!(validation as any).valid) {
-    return { emitted: false, validation_errors: (validation as any).errors };
+  const validation = validateMetrics(params.metrics as unknown as Record<string, unknown>);
+  if (!validation.valid) {
+    return { emitted: false, validation_errors: validation.errors };
   }
 
   const runDir = resolve(params.project_path, ".sdd", "runs", params.metrics.feature_id);
@@ -51,6 +91,108 @@ export async function handleEmitMetrics(params: {
   await atomicAppendJSONL(metricsPath, params.metrics);
 
   return { emitted: true, run_id: params.metrics.run_id, phase: params.metrics.phase };
+}
+
+// ─── Threshold alerts (internal, used by run_summary) ─────────────
+
+interface ThresholdAlert {
+  level: "warning" | "critical";
+  metric: string;
+  phase?: string;
+  current_value: number;
+  threshold: number;
+  message: string;
+}
+
+const DEFAULT_THRESHOLDS = {
+  max_fix_loops_per_phase: 3,
+  max_duration_ratio: 2.0,
+  min_first_pass_rate: 50,
+  max_total_duration_minutes: 60,
+  min_avg_confidence_warning: 0.5,
+  min_avg_confidence_critical: 0.3,
+};
+
+async function computeThresholdAlerts(
+  projectPath: string,
+  featureId: string,
+  metrics: PhaseMetrics[],
+): Promise<ThresholdAlert[]> {
+  const t = DEFAULT_THRESHOLDS;
+  const alerts: ThresholdAlert[] = [];
+
+  if (metrics.length === 0) return alerts;
+
+  // Load historical averages (only if >= 3 runs exist)
+  const historyPath = resolve(projectPath, ".sdd", "analytics", "history.jsonl");
+  let historicalDurByPhase: Record<string, number> | null = null;
+  if (await fileExists(historyPath)) {
+    const histRaw = await readFile(historyPath, "utf-8");
+    const summaries = parseJsonl<RunSummary>(histRaw);
+    if (summaries.length >= 3) {
+      historicalDurByPhase = {};
+      const durByPhase: Record<string, number[]> = {};
+      for (const s of summaries) {
+        for (const m of s.phase_metrics) {
+          (durByPhase[m.phase] ??= []).push(m.duration_ms);
+        }
+      }
+      for (const [phase, ds] of Object.entries(durByPhase)) {
+        historicalDurByPhase[phase] = ds.reduce((a, b) => a + b, 0) / ds.length;
+      }
+    }
+  }
+
+  for (const m of metrics) {
+    const phaseCap = FIX_LOOP_CAPS[m.phase];
+    if (phaseCap !== undefined && m.fix_loop_count > 0) {
+      const warningThreshold = Math.max(1, Math.ceil(phaseCap * 0.67));
+      if (m.fix_loop_count >= phaseCap) {
+        alerts.push({ level: "critical", metric: "fix_loop_count", phase: m.phase, current_value: m.fix_loop_count, threshold: phaseCap, message: `Phase "${m.phase}" exhausted all fix loop attempts: ${m.fix_loop_count}/${phaseCap}` });
+      } else if (m.fix_loop_count >= warningThreshold) {
+        alerts.push({ level: "warning", metric: "fix_loop_count", phase: m.phase, current_value: m.fix_loop_count, threshold: warningThreshold, message: `Phase "${m.phase}" used ${m.fix_loop_count}/${phaseCap} fix loop attempts` });
+      }
+    } else if (phaseCap === undefined && m.fix_loop_count > t.max_fix_loops_per_phase) {
+      const level = m.fix_loop_count > t.max_fix_loops_per_phase * 2 ? "critical" : "warning";
+      alerts.push({ level, metric: "fix_loop_count", phase: m.phase, current_value: m.fix_loop_count, threshold: t.max_fix_loops_per_phase, message: `Phase "${m.phase}" has ${m.fix_loop_count} fix loops (threshold: ${t.max_fix_loops_per_phase})` });
+    }
+    if (historicalDurByPhase && historicalDurByPhase[m.phase]) {
+      const avgDur = historicalDurByPhase[m.phase];
+      const ratio = m.duration_ms / avgDur;
+      if (ratio > t.max_duration_ratio) {
+        const level = ratio > t.max_duration_ratio * 2 ? "critical" : "warning";
+        alerts.push({ level, metric: "duration_ratio", phase: m.phase, current_value: Math.round(ratio * 100) / 100, threshold: t.max_duration_ratio, message: `Phase "${m.phase}" duration is ${ratio.toFixed(1)}x the historical average (threshold: ${t.max_duration_ratio}x)` });
+      }
+    }
+  }
+
+  const passed = metrics.filter(m => m.gate_result === "pass");
+  const firstPassRate = passed.length > 0 ? Math.round(passed.filter(m => m.gate_attempts === 1).length / passed.length * 100) : 0;
+  if (firstPassRate < t.min_first_pass_rate) {
+    const level = firstPassRate < t.min_first_pass_rate / 2 ? "critical" : "warning";
+    alerts.push({ level, metric: "first_pass_rate", current_value: firstPassRate, threshold: t.min_first_pass_rate, message: `First-pass rate is ${firstPassRate}% (threshold: ${t.min_first_pass_rate}%)` });
+  }
+
+  const totalDurationMin = metrics.reduce((s, m) => s + m.duration_ms, 0) / 60_000;
+  if (totalDurationMin > t.max_total_duration_minutes) {
+    const level = totalDurationMin > t.max_total_duration_minutes * 2 ? "critical" : "warning";
+    alerts.push({ level, metric: "total_duration_minutes", current_value: Math.round(totalDurationMin * 10) / 10, threshold: t.max_total_duration_minutes, message: `Total duration is ${totalDurationMin.toFixed(1)} min (threshold: ${t.max_total_duration_minutes} min)` });
+  }
+
+  const confPath = resolve(projectPath, ".sdd", "runs", featureId, "phase_confidence.json");
+  if (await fileExists(confPath)) {
+    try {
+      const confEntries: Array<{ feature_id: string; confidence: number }> = JSON.parse(await readFile(confPath, "utf-8"));
+      const featureConfs = confEntries.filter(e => e.feature_id === featureId).map(e => e.confidence);
+      if (featureConfs.length > 0) {
+        const avgConf = featureConfs.reduce((s, c) => s + c, 0) / featureConfs.length;
+        if (avgConf < t.min_avg_confidence_critical) alerts.push({ level: "critical", metric: "avg_confidence", current_value: Math.round(avgConf * 1000) / 1000, threshold: t.min_avg_confidence_critical, message: `Average confidence is ${avgConf.toFixed(3)} (critical threshold: ${t.min_avg_confidence_critical})` });
+        else if (avgConf < t.min_avg_confidence_warning) alerts.push({ level: "warning", metric: "avg_confidence", current_value: Math.round(avgConf * 1000) / 1000, threshold: t.min_avg_confidence_warning, message: `Average confidence is ${avgConf.toFixed(3)} (warning threshold: ${t.min_avg_confidence_warning})` });
+      }
+    } catch { /* malformed file — skip */ }
+  }
+
+  return alerts;
 }
 
 // ─── sdd_get_run_summary ─────────────────────────────────────────
@@ -167,12 +309,8 @@ export async function handleGetRunSummary(params: {
   const historyPath = join(analyticsDir, "history.jsonl");
   await atomicAppendJSONL(historyPath, summary);
 
-  // Fusion 2: include threshold alerts inline
-  const thresholdResult = await handleCheckThresholds({
-    project_path: params.project_path,
-    feature_id: params.feature_id,
-  });
-  const threshold_alerts = (thresholdResult as any).alerts ?? [];
+  // Inline threshold alerts
+  const threshold_alerts = await computeThresholdAlerts(params.project_path, params.feature_id, metrics);
   (summary as any).threshold_alerts = threshold_alerts;
 
   return summary;
@@ -324,186 +462,6 @@ export async function handleGetAnalytics(params: {
   };
 }
 
-// ─── sdd_check_thresholds ─────────────────────────────────────────
-
-interface ThresholdAlert {
-  level: "warning" | "critical";
-  metric: string;
-  phase?: string;
-  current_value: number;
-  threshold: number;
-  message: string;
-}
-
-const DEFAULT_THRESHOLDS = {
-  max_fix_loops_per_phase: 3,
-  max_duration_ratio: 2.0,
-  min_first_pass_rate: 50,
-  max_total_duration_minutes: 60,
-  min_avg_confidence_warning: 0.5,
-  min_avg_confidence_critical: 0.3,
-};
-
-export async function handleCheckThresholds(params: {
-  project_path: string;
-  feature_id:   string;
-  thresholds?:  Partial<typeof DEFAULT_THRESHOLDS>;
-}): Promise<unknown> {
-  const t = { ...DEFAULT_THRESHOLDS, ...params.thresholds };
-  const alerts: ThresholdAlert[] = [];
-
-  const metricsPath = resolve(params.project_path, ".sdd", "runs", params.feature_id, "metrics.jsonl");
-  if (!await fileExists(metricsPath)) {
-    return { error: `No metrics found for feature "${params.feature_id}"` };
-  }
-
-  const raw = await readFile(metricsPath, "utf-8");
-  const metrics = parseJsonl<PhaseMetrics>(raw);
-
-  if (metrics.length === 0) {
-    return { alerts: [], checked_at: new Date().toISOString() };
-  }
-
-  // Load historical averages (only if >= 3 runs exist)
-  const historyPath = resolve(params.project_path, ".sdd", "analytics", "history.jsonl");
-  let historicalDurByPhase: Record<string, number> | null = null;
-  if (await fileExists(historyPath)) {
-    const histRaw = await readFile(historyPath, "utf-8");
-    const summaries = parseJsonl<RunSummary>(histRaw);
-    if (summaries.length >= 3) {
-      historicalDurByPhase = {};
-      const durByPhase: Record<string, number[]> = {};
-      for (const s of summaries) {
-        for (const m of s.phase_metrics) {
-          (durByPhase[m.phase] ??= []).push(m.duration_ms);
-        }
-      }
-      for (const [phase, ds] of Object.entries(durByPhase)) {
-        historicalDurByPhase[phase] = ds.reduce((a, b) => a + b, 0) / ds.length;
-      }
-    }
-  }
-
-  // Per-phase checks
-  for (const m of metrics) {
-    // Fix loops threshold — relative to phase max_attempts from contracts.json
-    const phaseCap = FIX_LOOP_CAPS[m.phase];
-    if (phaseCap !== undefined && m.fix_loop_count > 0) {
-      const warningThreshold = Math.max(1, Math.ceil(phaseCap * 0.67));
-      const criticalThreshold = phaseCap;
-      if (m.fix_loop_count >= criticalThreshold) {
-        alerts.push({
-          level: "critical",
-          metric: "fix_loop_count",
-          phase: m.phase,
-          current_value: m.fix_loop_count,
-          threshold: criticalThreshold,
-          message: `Phase "${m.phase}" exhausted all fix loop attempts: ${m.fix_loop_count}/${phaseCap}`,
-        });
-      } else if (m.fix_loop_count >= warningThreshold) {
-        alerts.push({
-          level: "warning",
-          metric: "fix_loop_count",
-          phase: m.phase,
-          current_value: m.fix_loop_count,
-          threshold: warningThreshold,
-          message: `Phase "${m.phase}" used ${m.fix_loop_count}/${phaseCap} fix loop attempts`,
-        });
-      }
-    } else if (phaseCap === undefined && m.fix_loop_count > t.max_fix_loops_per_phase) {
-      // Fallback for phases not in contracts.json (use flat threshold)
-      const level = m.fix_loop_count > t.max_fix_loops_per_phase * 2 ? "critical" : "warning";
-      alerts.push({
-        level,
-        metric: "fix_loop_count",
-        phase: m.phase,
-        current_value: m.fix_loop_count,
-        threshold: t.max_fix_loops_per_phase,
-        message: `Phase "${m.phase}" has ${m.fix_loop_count} fix loops (threshold: ${t.max_fix_loops_per_phase})`,
-      });
-    }
-
-    // Duration ratio vs historical
-    if (historicalDurByPhase && historicalDurByPhase[m.phase]) {
-      const avgDur = historicalDurByPhase[m.phase];
-      const ratio = m.duration_ms / avgDur;
-      if (ratio > t.max_duration_ratio) {
-        const level = ratio > t.max_duration_ratio * 2 ? "critical" : "warning";
-        alerts.push({
-          level,
-          metric: "duration_ratio",
-          phase: m.phase,
-          current_value: Math.round(ratio * 100) / 100,
-          threshold: t.max_duration_ratio,
-          message: `Phase "${m.phase}" duration is ${ratio.toFixed(1)}x the historical average (threshold: ${t.max_duration_ratio}x)`,
-        });
-      }
-    }
-  }
-
-  // Run-level checks
-  const passed = metrics.filter(m => m.gate_result === "pass");
-  const firstPassRate = passed.length > 0
-    ? Math.round(passed.filter(m => m.gate_attempts === 1).length / passed.length * 100)
-    : 0;
-  if (firstPassRate < t.min_first_pass_rate) {
-    const level = firstPassRate < t.min_first_pass_rate / 2 ? "critical" : "warning";
-    alerts.push({
-      level,
-      metric: "first_pass_rate",
-      current_value: firstPassRate,
-      threshold: t.min_first_pass_rate,
-      message: `First-pass rate is ${firstPassRate}% (threshold: ${t.min_first_pass_rate}%)`,
-    });
-  }
-
-  const totalDurationMin = metrics.reduce((s, m) => s + m.duration_ms, 0) / 60_000;
-  if (totalDurationMin > t.max_total_duration_minutes) {
-    const level = totalDurationMin > t.max_total_duration_minutes * 2 ? "critical" : "warning";
-    alerts.push({
-      level,
-      metric: "total_duration_minutes",
-      current_value: Math.round(totalDurationMin * 10) / 10,
-      threshold: t.max_total_duration_minutes,
-      message: `Total duration is ${totalDurationMin.toFixed(1)} min (threshold: ${t.max_total_duration_minutes} min)`,
-    });
-  }
-
-  // Avg confidence check (from phase_confidence.json)
-  const confPath = resolve(params.project_path, ".sdd", "runs", params.feature_id, "phase_confidence.json");
-  if (await fileExists(confPath)) {
-    try {
-      const confEntries: Array<{ feature_id: string; confidence: number }> =
-        JSON.parse(await readFile(confPath, "utf-8"));
-      const featureConfs = confEntries
-        .filter(e => e.feature_id === params.feature_id)
-        .map(e => e.confidence);
-      if (featureConfs.length > 0) {
-        const avgConf = featureConfs.reduce((s, c) => s + c, 0) / featureConfs.length;
-        if (avgConf < t.min_avg_confidence_critical) {
-          alerts.push({
-            level: "critical",
-            metric: "avg_confidence",
-            current_value: Math.round(avgConf * 1000) / 1000,
-            threshold: t.min_avg_confidence_critical,
-            message: `Average confidence is ${avgConf.toFixed(3)} (critical threshold: ${t.min_avg_confidence_critical})`,
-          });
-        } else if (avgConf < t.min_avg_confidence_warning) {
-          alerts.push({
-            level: "warning",
-            metric: "avg_confidence",
-            current_value: Math.round(avgConf * 1000) / 1000,
-            threshold: t.min_avg_confidence_warning,
-            message: `Average confidence is ${avgConf.toFixed(3)} (warning threshold: ${t.min_avg_confidence_warning})`,
-          });
-        }
-      }
-    } catch { /* malformed file — skip confidence check */ }
-  }
-
-  return { alerts, checked_at: new Date().toISOString() };
-}
-
 // ─── sdd_estimate_cost ────────────────────────────────────────────
 
 const DEFAULT_PRICING: Record<string, { input: number; output: number }> = {
@@ -577,87 +535,6 @@ export async function handleEstimateCost(params: {
     total_cost_usd: Math.round(totalCost * 10000) / 10000,
     phases,
     model_breakdown: modelBreakdown,
-  };
-}
-
-// ─── sdd_get_live_status ──────────────────────────────────────────
-
-export async function handleGetLiveStatus(params: {
-  project_path: string;
-  feature_id:   string;
-}): Promise<unknown> {
-  // Check feature state
-  const sm = new StateManager(params.project_path);
-  const feature = await sm.getFeature(params.feature_id);
-  if (!feature) {
-    return { error: `Feature "${params.feature_id}" not found` };
-  }
-
-  // Read metrics to find in-progress phase
-  const metricsPath = resolve(params.project_path, ".sdd", "runs", params.feature_id, "metrics.jsonl");
-  if (!await fileExists(metricsPath)) {
-    return { status: "idle", feature_state: feature.state, last_completed_phase: null, last_completed_at: null };
-  }
-
-  const metrics = parseJsonl<PhaseMetrics>(await readFile(metricsPath, "utf-8"));
-  if (metrics.length === 0) {
-    return { status: "idle", feature_state: feature.state, last_completed_phase: null, last_completed_at: null };
-  }
-
-  // Phases with completed_at are done. Find one that started but has no matching completion.
-  // Since metrics are append-only with one entry per phase completion, we check run.log for in-progress
-  const runLogPath = resolve(params.project_path, ".sdd", "runs", params.feature_id, "run.log");
-  let currentPhase: string | null = null;
-  let startedAt: string | null = null;
-
-  if (await fileExists(runLogPath)) {
-    const logRaw = await readFile(runLogPath, "utf-8");
-    const events = logRaw.trim().split("\n").filter(Boolean).map(l => {
-      try { return JSON.parse(l); } catch { return null; }
-    }).filter(Boolean);
-
-    // Find last phase_start without a matching phase_end
-    const starts = new Map<string, string>();
-    const ends = new Set<string>();
-    for (const evt of events) {
-      if (evt.event_type === "phase_start" && evt.phase) {
-        starts.set(evt.phase, evt.timestamp);
-      }
-      if (evt.event_type === "phase_end" && evt.phase) {
-        ends.add(evt.phase);
-      }
-    }
-    for (const [phase, ts] of starts) {
-      if (!ends.has(phase)) {
-        currentPhase = phase;
-        startedAt = ts;
-      }
-    }
-  }
-
-  // Last completed phase from metrics (sorted by completed_at)
-  const sorted = [...metrics].sort((a, b) => a.completed_at.localeCompare(b.completed_at));
-  const last = sorted[sorted.length - 1];
-
-  if (currentPhase) {
-    const elapsedMs = startedAt ? Date.now() - new Date(startedAt).getTime() : null;
-    return {
-      status: "running",
-      feature_state: feature.state,
-      current_phase: currentPhase,
-      started_at: startedAt,
-      elapsed_seconds: elapsedMs !== null ? Math.round(elapsedMs / 1000) : null,
-      last_completed_phase: last.phase,
-      last_completed_at: last.completed_at,
-    };
-  }
-
-  return {
-    status: "idle",
-    feature_state: feature.state,
-    current_phase: null,
-    last_completed_phase: last.phase,
-    last_completed_at: last.completed_at,
   };
 }
 
@@ -826,112 +703,6 @@ export async function handleDetectAnomaly(params: {
   };
 }
 
-// ─── sdd_validate_metrics ─────────────────────────────────────────
-
-const REQUIRED_FIELDS: Record<string, string> = {
-  run_id:            "string",
-  feature_id:        "string",
-  phase:             "string",
-  agent:             "string",
-  model:             "string",
-  started_at:        "string",
-  completed_at:      "string",
-  duration_ms:       "number",
-  gate_result:       "string",
-  gate_attempts:     "number",
-  findings_count:    "number",
-  fix_loop_count:    "number",
-};
-
-const OPTIONAL_FIELDS: Record<string, string> = {
-  tokens_in:         "number",
-  tokens_out:        "number",
-  tool_calls_count:  "number",
-  delta_direction:   "string",
-  feature_type:      "string",
-  complexity:        "string",
-};
-
-const GATE_RESULT_VALUES = new Set(["pass", "fail", "skip"]);
-
-export async function handleValidateMetrics(params: {
-  project_path: string;
-  metrics: Record<string, unknown>;
-}): Promise<unknown> {
-  const m = params.metrics;
-  const errors: Array<{ field: string; message: string }> = [];
-  const warnings: Array<{ field: string; message: string }> = [];
-
-  // Check required fields
-  for (const [field, expectedType] of Object.entries(REQUIRED_FIELDS)) {
-    if (!(field in m)) {
-      errors.push({ field, message: `Required field "${field}" is missing` });
-      continue;
-    }
-    const val = m[field];
-    if (val === null || val === undefined) {
-      errors.push({ field, message: `Required field "${field}" is null/undefined` });
-    } else if (typeof val !== expectedType) {
-      errors.push({ field, message: `Expected ${expectedType}, got ${typeof val}` });
-    }
-  }
-
-  // Check optional fields types (only if present and not null)
-  for (const [field, expectedType] of Object.entries(OPTIONAL_FIELDS)) {
-    if (field in m && m[field] !== null && m[field] !== undefined) {
-      if (typeof m[field] !== expectedType) {
-        errors.push({ field, message: `Expected ${expectedType} or null, got ${typeof m[field]}` });
-      }
-    }
-  }
-
-  // Validate gate_result enum
-  if (typeof m.gate_result === "string" && !GATE_RESULT_VALUES.has(m.gate_result)) {
-    errors.push({ field: "gate_result", message: `Invalid value "${m.gate_result}". Expected: pass, fail, skip` });
-  }
-
-  // Validate ISO timestamps
-  for (const tsField of ["started_at", "completed_at"]) {
-    if (typeof m[tsField] === "string") {
-      const d = new Date(m[tsField] as string);
-      if (isNaN(d.getTime())) {
-        errors.push({ field: tsField, message: `Invalid ISO8601 timestamp: "${m[tsField]}"` });
-      }
-    }
-  }
-
-  // Validate non-negative numbers
-  for (const numField of ["duration_ms", "gate_attempts", "findings_count", "fix_loop_count", "tokens_in", "tokens_out", "tool_calls_count"]) {
-    if (numField in m && typeof m[numField] === "number" && (m[numField] as number) < 0) {
-      errors.push({ field: numField, message: `Value must be non-negative, got ${m[numField]}` });
-    }
-  }
-
-  // Check findings_severity is array of strings
-  if ("findings_severity" in m) {
-    if (!Array.isArray(m.findings_severity)) {
-      errors.push({ field: "findings_severity", message: `Expected array, got ${typeof m.findings_severity}` });
-    } else {
-      for (const s of m.findings_severity as unknown[]) {
-        if (typeof s !== "string") {
-          errors.push({ field: "findings_severity", message: `Array element must be string, got ${typeof s}` });
-          break;
-        }
-      }
-    }
-  }
-
-  // Warn about unknown fields
-  const knownFields = new Set([...Object.keys(REQUIRED_FIELDS), ...Object.keys(OPTIONAL_FIELDS), "findings_severity"]);
-  for (const key of Object.keys(m)) {
-    if (!knownFields.has(key)) {
-      warnings.push({ field: key, message: `Unknown field "${key}" — will be persisted but not used` });
-    }
-  }
-
-  return { valid: errors.length === 0, errors, warnings };
-}
-
 // ─── sdd_get_manifest ─────────────────────────────────────────────
 
 export async function handleGetManifest(_params: {
@@ -946,32 +717,3 @@ export async function handleGetManifest(_params: {
   }
 }
 
-// ─── sdd_breadcrumb ───────────────────────────────────────────────
-
-export async function handleBreadcrumb(params: {
-  project_path: string;
-  feature_id: string;
-  phase: string;
-  agent: string;
-  decision: string;
-  reasoning: string;
-  alternatives_considered?: string[];
-}): Promise<unknown> {
-  const analyticsDir = resolve(params.project_path, ".sdd", "analytics");
-  await mkdir(analyticsDir, { recursive: true });
-
-  const breadcrumb = {
-    feature_id: params.feature_id,
-    phase: params.phase,
-    agent: params.agent,
-    decision: params.decision,
-    reasoning: params.reasoning,
-    alternatives_considered: params.alternatives_considered ?? [],
-    timestamp: new Date().toISOString(),
-  };
-
-  const breadcrumbsPath = join(analyticsDir, "breadcrumbs.jsonl");
-  await atomicAppendJSONL(breadcrumbsPath, breadcrumb);
-
-  return { recorded: true, breadcrumb };
-}

@@ -21,7 +21,6 @@ import {
   handleLogEvent,
   handleMemoryRead,
   handleMemoryWrite,
-  handleTickDecay,
   handleAppendSignal,
   handleUpdateTask,
   handleUpdateFeature,
@@ -32,14 +31,10 @@ import {
   handleEmitMetrics,
   handleGetRunSummary,
   handleGetAnalytics,
-  handleCheckThresholds,
   handleEstimateCost,
-  handleGetLiveStatus,
   handleCompareRuns,
   handleDetectAnomaly,
-  handleValidateMetrics,
   handleGetManifest,
-  handleBreadcrumb,
 } from "./observability.js";
 
 import {
@@ -47,7 +42,6 @@ import {
   handleGetPatterns,
   handleProposePattern,
   handlePromotePattern,
-  handleTickPatterns,
   handleProposeExperiment,
   handleEvaluateExperiment,
   handleProposeEvolution,
@@ -57,7 +51,6 @@ import {
   handleGetStrategy,
   handleRunRetro,
   handlePhaseConfidence,
-  handleSetGolden,
 } from "./metacognition.js";
 
 import {
@@ -78,7 +71,7 @@ export const TOOLS = [
       properties: {
         project_path: { type: "string", description: "Absolute path to the project root" },
         feature_id: { type: "string", description: "Optional: specific feature to query" },
-        include_run_log: { type: "boolean", description: "Optional: if true and feature_id is set, include live run status (from sdd_get_live_status)" },
+        include_run_log: { type: "boolean", description: "Optional: if true and feature_id is set, include live run status" },
       },
       required: ["project_path"],
     },
@@ -373,28 +366,6 @@ export const TOOLS = [
     },
   },
   {
-    name: "sdd_tick_decay",
-    description:
-      "@deprecated Use sdd_tick_maintenance with target='memory' instead. " +
-      "Decrement TTL of learned patterns and exploration entries. Removes expired entries.",
-    inputSchema: {
-      type: "object" as const,
-      properties: {
-        project_path: { type: "string", description: "Absolute path to the project root" },
-      },
-      required: ["project_path"],
-    },
-    outputSchema: {
-      type: "object" as const,
-      description: "Decay tick results",
-      properties: {
-        patterns_removed:     { type: "number", description: "Number of learned patterns that expired" },
-        explorations_expired: { type: "number", description: "Number of exploration entries that expired" },
-        total_removed:        { type: "number", description: "Total entries removed" },
-      },
-    },
-  },
-  {
     name: "sdd_update_task",
     description:
       "Update the status of a task within a feature. Use status='completed' to mark a task done " +
@@ -648,43 +619,6 @@ export const TOOLS = [
       },
     },
   },
-  {
-    name: "sdd_tick_patterns",
-    description:
-      "@deprecated Use sdd_tick_maintenance with target='patterns' instead. " +
-      "Decrement TTL of all active and candidate ExploitationPatterns by 1. " +
-      "Patterns that reach TTL=0 are marked as decayed. " +
-      "Call once per pipeline run at post-pipeline (same time as sdd_tick_decay).",
-    inputSchema: {
-      type: "object" as const,
-      properties: {
-        project_path: { type: "string" },
-      },
-      required: ["project_path"],
-    },
-    outputSchema: {
-      type: "object" as const,
-      description: "Pattern tick result with adaptive decay details",
-      properties: {
-        ticked:  { type: "boolean", description: "Always true on success" },
-        decayed: { type: "number", description: "Number of patterns that decayed (remaining_ttl < 1.0)" },
-        details: {
-          type: "array", description: "Per-pattern adaptive decay details",
-          items: {
-            type: "object",
-            properties: {
-              pattern_id:              { type: "string" },
-              decay_rate:              { type: "number", description: "Lambda: ticks_since_confirmation / total_ticks_alive" },
-              remaining_ttl:           { type: "number", description: "Computed remaining TTL via exponential decay" },
-              ticks_since_confirmation: { type: "number" },
-              status:                  { type: "string" },
-            },
-          },
-        },
-      },
-    },
-  },
-
   {
     name: "sdd_propose_evolution",
     description:
@@ -985,30 +919,6 @@ export const TOOLS = [
       },
     },
   },
-  {
-    name: "sdd_set_golden",
-    description:
-      "@deprecated — Golden baseline is now computed dynamically by sdd_compute_score as a " +
-      "complexity-weighted moving average of the last N runs from history.jsonl. " +
-      "This tool is a no-op and will be removed in a future version. Do not call it.",
-    inputSchema: {
-      type: "object" as const,
-      properties: {
-        project_path: { type: "string", description: "Absolute path to the project root" },
-        feature_id: { type: "string", description: "Ignored (deprecated)" },
-      },
-      required: ["project_path"],
-    },
-    outputSchema: {
-      type: "object" as const,
-      description: "Deprecation notice",
-      properties: {
-        deprecated: { type: "boolean", description: "Always true" },
-        message:    { type: "string", description: "Deprecation message" },
-      },
-    },
-  },
-
   // ─── Observability Layer (Phase 1) ────────────────────────────────
   {
     name: "sdd_emit_metrics",
@@ -1148,57 +1058,6 @@ export const TOOLS = [
     },
   },
   {
-    name: "sdd_check_thresholds",
-    description:
-      "@deprecated Threshold alerts are now included in sdd_get_run_summary response. " +
-      "Detect when metrics cross thresholds and emit warnings/criticals. " +
-      "Checks per-phase fix_loops and duration ratio vs historical average, " +
-      "plus run-level first_pass_rate and total_duration. " +
-      "Critical if value is 2x the threshold, warning if just crossed. " +
-      "Uses >= 3 historical runs for ratio checks; absolute thresholds always apply.",
-    inputSchema: {
-      type: "object" as const,
-      properties: {
-        project_path: { type: "string", description: "Absolute path to the project root" },
-        feature_id:   { type: "string", description: "Feature identifier" },
-        thresholds: {
-          type: "object",
-          description: "Optional: override default thresholds",
-          properties: {
-            max_fix_loops_per_phase:    { type: "number", description: "Default: 3" },
-            max_duration_ratio:         { type: "number", description: "Ratio vs historical avg. Default: 2.0" },
-            min_first_pass_rate:        { type: "number", description: "Minimum %. Default: 50" },
-            max_total_duration_minutes: { type: "number", description: "Default: 60" },
-          },
-        },
-      },
-      required: ["project_path", "feature_id"],
-    },
-    outputSchema: {
-      type: "object" as const,
-      description: "Threshold check results with alerts",
-      properties: {
-        alerts: {
-          type: "array",
-          description: "Threshold violations",
-          items: {
-            type: "object",
-            properties: {
-              level:         { type: "string", enum: ["warning", "critical"] },
-              metric:        { type: "string", description: "Metric name that crossed threshold" },
-              phase:         { type: "string", description: "Phase name (for per-phase checks)" },
-              current_value: { type: "number", description: "Current metric value" },
-              threshold:     { type: "number", description: "Threshold that was crossed" },
-              message:       { type: "string", description: "Human-readable alert message" },
-            },
-          },
-        },
-        checked_at: { type: "string", description: "ISO8601 timestamp of the check" },
-        error:      { type: "string", description: "Error if no metrics found" },
-      },
-    },
-  },
-  {
     name: "sdd_estimate_cost",
     description:
       "Estimate cost in USD from tokens consumed in a pipeline run. " +
@@ -1245,36 +1104,6 @@ export const TOOLS = [
         },
         model_breakdown: { type: "object", description: "Cost per model", additionalProperties: { type: "number" } },
         error:           { type: "string", description: "Error if no metrics or history found" },
-      },
-    },
-  },
-  {
-    name: "sdd_get_live_status",
-    description:
-      "@deprecated Use sdd_get_state with include_run_log=true instead. " +
-      "Query what phase is currently executing for a feature. " +
-      "Reads run.log for phase_start/phase_end events and metrics.jsonl for completed phases. " +
-      "Returns status (running/idle), current_phase, elapsed_seconds, and last_completed_phase.",
-    inputSchema: {
-      type: "object" as const,
-      properties: {
-        project_path: { type: "string", description: "Absolute path to the project root" },
-        feature_id:   { type: "string", description: "Feature identifier" },
-      },
-      required: ["project_path", "feature_id"],
-    },
-    outputSchema: {
-      type: "object" as const,
-      description: "Live execution status for the feature",
-      properties: {
-        status:               { type: "string", enum: ["running", "idle"], description: "Whether a phase is currently executing" },
-        feature_state:        { type: "string", description: "Current feature lifecycle state" },
-        current_phase:        { type: "string", description: "Phase currently executing (null if idle)" },
-        started_at:           { type: "string", description: "ISO8601 timestamp when current phase started" },
-        elapsed_seconds:      { type: "number", description: "Seconds elapsed since phase started" },
-        last_completed_phase: { type: "string", description: "Most recently completed phase (null if none)" },
-        last_completed_at:    { type: "string", description: "ISO8601 timestamp of last completion" },
-        error:                { type: "string", description: "Error if feature not found" },
       },
     },
   },
@@ -1381,56 +1210,6 @@ export const TOOLS = [
       },
     },
   },
-  {
-    name: "sdd_validate_metrics",
-    description:
-      "@deprecated Validation is now built into sdd_emit_metrics (returns validation_errors on failure). " +
-      "Validate a PhaseMetrics object before persisting with sdd_emit_metrics. " +
-      "Checks required fields (run_id, feature_id, phase, agent, model, timestamps, duration, gate_result, gate_attempts, findings_count, fix_loop_count), " +
-      "validates types, ISO timestamps, non-negative numbers, gate_result enum, and warns about unknown fields.",
-    inputSchema: {
-      type: "object" as const,
-      properties: {
-        project_path: { type: "string", description: "Absolute path to the project root" },
-        metrics: {
-          type: "object",
-          description: "The PhaseMetrics object to validate",
-          additionalProperties: true,
-        },
-      },
-      required: ["project_path", "metrics"],
-    },
-    outputSchema: {
-      type: "object" as const,
-      description: "Validation result with errors and warnings",
-      properties: {
-        valid: { type: "boolean", description: "Whether the metrics object passed all required validations" },
-        errors: {
-          type: "array",
-          description: "Validation errors (missing/invalid fields)",
-          items: {
-            type: "object",
-            properties: {
-              field:   { type: "string", description: "Field name" },
-              message: { type: "string", description: "Error description" },
-            },
-          },
-        },
-        warnings: {
-          type: "array",
-          description: "Non-blocking warnings (unknown fields)",
-          items: {
-            type: "object",
-            properties: {
-              field:   { type: "string", description: "Field name" },
-              message: { type: "string", description: "Warning description" },
-            },
-          },
-        },
-      },
-    },
-  },
-
   // ─── GAP-05: Tool Definition Versioning ─────────────────────────────
   {
     name: "sdd_get_manifest",
@@ -1454,44 +1233,11 @@ export const TOOLS = [
     },
   },
 
-  // ─── GAP-07: Subagent Breadcrumbs ───────────────────────────────────
-  {
-    name: "sdd_breadcrumb",
-    description: "@deprecated Use sdd_log_event with event_type='decision' and data={decision, reasoning, alternatives_considered} instead. " +
-      "Record a subagent decision breadcrumb. Appends to .sdd/analytics/breadcrumbs.jsonl. Use when a subagent makes an architectural decision or chooses between alternatives.",
-    inputSchema: {
-      type: "object" as const,
-      properties: {
-        project_path: { type: "string", description: "Absolute path to the project root" },
-        feature_id: { type: "string", description: "Feature identifier" },
-        phase: { type: "string", description: "Pipeline phase where decision was made" },
-        agent: { type: "string", description: "Agent that made the decision" },
-        decision: { type: "string", description: "What was decided" },
-        reasoning: { type: "string", description: "Why this decision was made" },
-        alternatives_considered: {
-          type: "array",
-          items: { type: "string" },
-          description: "Other options that were considered",
-        },
-      },
-      required: ["project_path", "feature_id", "phase", "agent", "decision", "reasoning"],
-    },
-    outputSchema: {
-      type: "object" as const,
-      properties: {
-        recorded: { type: "boolean", description: "Whether the breadcrumb was recorded" },
-        breadcrumb: { type: "object", description: "The persisted breadcrumb object" },
-      },
-      description: "Confirmation with the recorded breadcrumb",
-    },
-  },
-
   // ─── Fusion: sdd_tick_maintenance ──────────────────────────────────
   {
     name: "sdd_tick_maintenance",
     description:
       "Unified maintenance tick: decays memory TTLs (learned patterns + explorations) AND metacognition pattern TTLs in one call. " +
-      "Replaces calling sdd_tick_decay + sdd_tick_patterns separately. " +
       "Use target='all' (default) for both, 'patterns' for metacognition only, 'memory' for memory decay only.",
     inputSchema: {
       type: "object" as const,
@@ -1509,8 +1255,8 @@ export const TOOLS = [
       type: "object" as const,
       description: "Combined maintenance tick results",
       properties: {
-        patterns: { type: "object", description: "Result from sdd_tick_patterns (null if target=memory)", additionalProperties: true },
-        memory:   { type: "object", description: "Result from sdd_tick_decay (null if target=patterns)", additionalProperties: true },
+        patterns: { type: "object", description: "Pattern decay results (null if target=memory)", additionalProperties: true },
+        memory:   { type: "object", description: "Memory decay results (null if target=patterns)", additionalProperties: true },
         target:   { type: "string", description: "The target that was ticked" },
       },
     },
@@ -1611,7 +1357,6 @@ export const HANDLER_MAP: Record<string, HandlerFn> = {
   sdd_log_event: handleLogEvent,
   sdd_memory_read: handleMemoryRead,
   sdd_memory_write: handleMemoryWrite,
-  sdd_tick_decay: handleTickDecay,
   sdd_append_signal: handleAppendSignal,
   sdd_update_task: handleUpdateTask,
   sdd_update_feature: handleUpdateFeature,
@@ -1619,20 +1364,15 @@ export const HANDLER_MAP: Record<string, HandlerFn> = {
   sdd_emit_metrics:    handleEmitMetrics,
   sdd_get_run_summary: handleGetRunSummary,
   sdd_get_analytics:       handleGetAnalytics,
-  sdd_check_thresholds:    handleCheckThresholds,
   sdd_estimate_cost:       handleEstimateCost,
-  sdd_get_live_status:     handleGetLiveStatus,
   sdd_compare_runs:        handleCompareRuns,
   sdd_detect_anomaly:      handleDetectAnomaly,
-  sdd_validate_metrics:    handleValidateMetrics,
   sdd_get_manifest:        handleGetManifest,
-  sdd_breadcrumb:          handleBreadcrumb,
   // Metacognition Layer (Phase 2+)
   sdd_compute_score:        handleComputeScore,
   sdd_get_patterns:         handleGetPatterns,
   sdd_propose_pattern:      handleProposePattern,
   sdd_promote_pattern:      handlePromotePattern,
-  sdd_tick_patterns:        handleTickPatterns,
   sdd_propose_experiment:   handleProposeExperiment,
   sdd_evaluate_experiment:  handleEvaluateExperiment,
   sdd_propose_evolution:    handleProposeEvolution,
@@ -1642,7 +1382,6 @@ export const HANDLER_MAP: Record<string, HandlerFn> = {
   sdd_get_strategy:         handleGetStrategy,
   sdd_run_retro:            handleRunRetro,
   sdd_phase_confidence:     handlePhaseConfidence,
-  sdd_set_golden:           handleSetGolden,
   // Fusion tools
   sdd_tick_maintenance:        handleTickMaintenance,
   // Tool Factory (Self-Evolution)

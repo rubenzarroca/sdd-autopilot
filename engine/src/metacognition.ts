@@ -98,21 +98,6 @@ function durationTrendScore(summary: RunSummary, history: RunSummary[]): number 
   return 20;                       // >30% slower
 }
 
-// ─── sdd_set_golden (DEPRECATED — golden is now computed dynamically by sdd_compute_score) ───
-
-export async function handleSetGolden(params: {
-  project_path: string;
-  feature_id?: string;
-}): Promise<unknown> {
-  return {
-    deprecated: true,
-    message:
-      "sdd_set_golden is deprecated. The golden baseline is now computed dynamically " +
-      "as a complexity-weighted moving average of the last N runs by sdd_compute_score. " +
-      "No manual golden setting is needed. Remove this call from your pipeline.",
-  };
-}
-
 // ─── Golden baseline: complexity-weighted moving average ─────────
 
 const COMPLEXITY_MULTIPLIERS: Record<string, number> = {
@@ -530,10 +515,6 @@ export async function handlePromotePattern(params: {
   return { promoted: true, pattern_id: pattern.pattern_id, status: "active", bayesian_stats };
 }
 
-// ─── sdd_tick_decay extension: decay patterns ────────────────────
-// Called by the existing sdd_tick_decay handler; exported for use in handlers.ts if needed.
-// For now, pattern TTL decay is handled separately via sdd_tick_patterns (added to handler map).
-
 // ─── Experiments helpers ──────────────────────────────────────────
 
 const readExperiments  = (p: string) => readMetacognitionJson<Experiment>(p, "experiments.json");
@@ -696,7 +677,7 @@ export async function handleProposeEvolution(params: {
   };
 }
 
-// ─── sdd_tick_patterns (Phase 3) — Adaptive exponential decay ───
+// ─── Pattern TTL decay (internal, used by sdd_tick_maintenance) ──
 export async function handleTickPatterns(params: {
   project_path: string;
 }): Promise<unknown> {

@@ -49,14 +49,40 @@ export async function handleGetState(params: {
     }
     const result: Record<string, unknown> = { feature_id: params.feature_id, ...feature };
 
-    // Fusion 4: optionally include live run status
+    // Optionally include live run status (inline)
     if (params.include_run_log) {
-      const { handleGetLiveStatus } = await import("./observability.js");
-      const liveStatus = await handleGetLiveStatus({
-        project_path: params.project_path,
-        feature_id: params.feature_id,
-      });
-      result.live_status = liveStatus;
+      const runLogPath = resolve(params.project_path, ".sdd", "runs", params.feature_id, "run.log");
+      let currentPhase: string | null = null;
+      let startedAt: string | null = null;
+      if (await fileExists(runLogPath)) {
+        const logRaw = await readFile(runLogPath, "utf-8");
+        const events = logRaw.trim().split("\n").filter(Boolean).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+        const starts = new Map<string, string>();
+        const ends = new Set<string>();
+        for (const evt of events) {
+          if (evt.event_type === "phase_start" && evt.phase) starts.set(evt.phase, evt.timestamp);
+          if (evt.event_type === "phase_end" && evt.phase) ends.add(evt.phase);
+        }
+        for (const [phase, ts] of starts) { if (!ends.has(phase)) { currentPhase = phase; startedAt = ts; } }
+      }
+      const { parseJsonl } = await import("./utils.js");
+      const metricsPath = resolve(params.project_path, ".sdd", "runs", params.feature_id, "metrics.jsonl");
+      let lastPhase: string | null = null;
+      let lastCompletedAt: string | null = null;
+      if (await fileExists(metricsPath)) {
+        const metrics = parseJsonl<{ phase: string; completed_at: string }>(await readFile(metricsPath, "utf-8"));
+        if (metrics.length > 0) {
+          const sorted = [...metrics].sort((a, b) => a.completed_at.localeCompare(b.completed_at));
+          lastPhase = sorted[sorted.length - 1].phase;
+          lastCompletedAt = sorted[sorted.length - 1].completed_at;
+        }
+      }
+      if (currentPhase) {
+        const elapsedMs = startedAt ? Date.now() - new Date(startedAt).getTime() : null;
+        result.live_status = { status: "running", feature_state: feature.state, current_phase: currentPhase, started_at: startedAt, elapsed_seconds: elapsedMs !== null ? Math.round(elapsedMs / 1000) : null, last_completed_phase: lastPhase, last_completed_at: lastCompletedAt };
+      } else {
+        result.live_status = { status: "idle", feature_state: feature.state, current_phase: null, last_completed_phase: lastPhase, last_completed_at: lastCompletedAt };
+      }
     }
 
     return result;
@@ -737,7 +763,7 @@ export async function handleMemoryWrite(params: {
   return result;
 }
 
-// ─── 10. sdd_tick_decay ──────────────────────────────────────────
+// ─── 10. Memory TTL decay (internal, used by sdd_tick_maintenance) ──
 
 export async function handleTickDecay(params: {
   project_path: string;
@@ -813,7 +839,7 @@ export async function handleTickDecay(params: {
 }
 
 // ─── 11b. sdd_tick_maintenance ────────────────────────────────────
-// Fusion of sdd_tick_decay + sdd_tick_patterns into a single maintenance tick.
+// Unified maintenance tick: memory decay + pattern decay in one call.
 
 export async function handleTickMaintenance(params: {
   project_path: string;

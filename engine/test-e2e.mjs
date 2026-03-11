@@ -22,8 +22,8 @@ import {
   handleLogEvent,
   handleMemoryRead,
   handleMemoryWrite,
-  handleTickDecay,
   handleAppendSignal,
+  handleTickMaintenance,
   handleUpdateTask,
   handleUpdateFeature,
 } from "./build/handlers.js";
@@ -37,7 +37,6 @@ import {
   handleGetPatterns,
   handleProposePattern,
   handlePromotePattern,
-  handleTickPatterns,
   handleProposeExperiment,
   handleEvaluateExperiment,
   handleProposeEvolution,
@@ -382,8 +381,8 @@ h = await handleMemoryRead({
 });
 assert("memory_read all returns content", typeof h.content === "string" && h.content.length > 0);
 
-// ── Test 10: sdd_tick_decay ───────────────────────────────────────
-console.log("\n=== Test 10: sdd_tick_decay ===");
+// ── Test 10: sdd_tick_maintenance (memory decay) ─────────────────
+console.log("\n=== Test 10: sdd_tick_maintenance (memory) ===");
 
 // Write a pattern with TTL for decay testing
 h = await handleMemoryWrite({
@@ -394,10 +393,10 @@ h = await handleMemoryWrite({
   ttl: 2,
 });
 
-h = await handleTickDecay({ project_path: projectPath });
-assert("tick_decay returns patterns_removed count", typeof h.patterns_removed === "number");
-assert("tick_decay returns explorations_expired count", typeof h.explorations_expired === "number");
-assert("tick_decay returns total_removed count", typeof h.total_removed === "number");
+h = await handleTickMaintenance({ project_path: projectPath, target: "memory" });
+assert("tick_maintenance memory returns memory result", h.memory !== null && typeof h.memory === "object");
+assert("tick_maintenance memory returns patterns null", h.patterns === null);
+assert("tick_maintenance memory returns target", h.target === "memory");
 
 // ── Test 11: sdd_append_signal ────────────────────────────────────
 console.log("\n=== Test 11: sdd_append_signal ===");
@@ -1079,8 +1078,8 @@ assert("get_patterns filter feature_type=ui returns patterns with no feature_typ
 h = await handleGetPatterns({ project_path: "/tmp/empty-metacognition-path" });
 assert("get_patterns nonexistent returns empty", h.count === 0 && h.patterns.length === 0);
 
-// ── Test 20: sdd_tick_patterns ─────────────────────────────────────
-console.log("\n=== Test 20: sdd_tick_patterns ===");
+// ── Test 20: sdd_tick_maintenance (patterns) ──────────────────────
+console.log("\n=== Test 20: sdd_tick_maintenance (patterns) ===");
 
 // Add a candidate pattern and build confidence via Bayesian updates before promoting
 await handleProposePattern({
@@ -1097,7 +1096,7 @@ await handlePromotePattern({ project_path: projectPath, pattern_id: "soon-to-dec
 // Verify it's active before tick
 let patternsBefore = JSON.parse(readFileSync(patternsPath, "utf-8"));
 const beforeDecay = patternsBefore.find(p => p.pattern_id === "soon-to-decay");
-assert("tick_patterns: soon-to-decay is active before tick", beforeDecay?.status === "active");
+assert("tick_maintenance patterns: soon-to-decay is active before tick", beforeDecay?.status === "active");
 
 // With adaptive exponential decay: remaining_ttl = 20 * exp(-lambda * ticks_since_confirmation)
 // After 1 tick with no confirmations: total_ticks_alive=1, last_confirmed=0, lambda=1/1=1,
@@ -1105,28 +1104,28 @@ assert("tick_patterns: soon-to-decay is active before tick", beforeDecay?.status
 // Confirm haiku-triage-all between ticks so it survives (resets ticks_since_confirmation).
 let totalDecayed = 0;
 for (let i = 0; i < 3; i++) {
-  h = await handleTickPatterns({ project_path: projectPath });
-  totalDecayed += h.decayed;
+  h = await handleTickMaintenance({ project_path: projectPath, target: "patterns" });
+  totalDecayed += h.patterns.decayed;
   // Confirm haiku-triage-all after each tick to keep it alive
   await handleUpdatePattern({ project_path: projectPath, pattern_id: "haiku-triage-all", outcome: "success" });
 }
-assert("tick_patterns returns ticked:true", h.ticked === true);
-assert("tick_patterns: soon-to-decay decayed after multiple ticks", totalDecayed >= 1);
+assert("tick_maintenance patterns returns ticked:true", h.patterns.ticked === true);
+assert("tick_maintenance patterns: soon-to-decay decayed after multiple ticks", totalDecayed >= 1);
 
 // Verify decay in file
 const patternsAfter = JSON.parse(readFileSync(patternsPath, "utf-8"));
 const afterDecay = patternsAfter.find(p => p.pattern_id === "soon-to-decay");
-assert("tick_patterns: soon-to-decay is now decayed", afterDecay?.status === "decayed");
-assert("tick_patterns: soon-to-decay has decayed_at", typeof afterDecay?.decayed_at === "string");
+assert("tick_maintenance patterns: soon-to-decay is now decayed", afterDecay?.status === "decayed");
+assert("tick_maintenance patterns: soon-to-decay has decayed_at", typeof afterDecay?.decayed_at === "string");
 
 // Other patterns: TTL decreased via adaptive decay but survived (confirmed between ticks)
 const otherPattern = patternsAfter.find(p => p.pattern_id === "haiku-triage-all");
-assert("tick_patterns: haiku-triage-all TTL decreased", otherPattern?.ttl < 20);
-assert("tick_patterns: haiku-triage-all still active", otherPattern?.status === "active");
+assert("tick_maintenance patterns: haiku-triage-all TTL decreased", otherPattern?.ttl < 20);
+assert("tick_maintenance patterns: haiku-triage-all still active", otherPattern?.status === "active");
 
 // Decayed pattern cannot be promoted
 h = await handlePromotePattern({ project_path: projectPath, pattern_id: "soon-to-decay" });
-assert("tick_patterns: decayed pattern cannot be promoted", h.promoted === false && h.reason.includes("decayed"));
+assert("tick_maintenance patterns: decayed pattern cannot be promoted", h.promoted === false && h.reason.includes("decayed"));
 
 // ── Test 21: sdd_propose_experiment ──────────────────────────────
 console.log("\n=== Test 21: sdd_propose_experiment ===");

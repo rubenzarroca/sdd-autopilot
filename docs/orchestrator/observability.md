@@ -145,4 +145,4 @@ sdd_phase_confidence(project_path, feature_id, phase="{phase_name}",
   factors={ gate_attempts: N, fix_loops: N, pair_review_revised: true|false, partial_output: true|false })
 ```
 
-This persists to `.sdd/runs/{feature_id}/phase_confidence.json`. The data feeds into `sdd_get_run_summary` (which computes `avg_confidence`) and `sdd_check_thresholds`.
+This persists to `.sdd/runs/{feature_id}/phase_confidence.json`. The data feeds into `sdd_get_run_summary` (which computes `avg_confidence` and inline threshold alerts).
