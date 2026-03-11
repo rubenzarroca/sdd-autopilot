@@ -16,14 +16,19 @@ Read the feature description and produce exactly two classification fields. No e
 
 ## Output
 
-A single JSON object with two fields, nothing else:
+A single JSON object, nothing else:
 
 ```json
 {
   "feature_type": "api_endpoint" | "ui_component" | "refactor" | "bugfix" | "hotfix" | "integration" | "infrastructure" | "data_pipeline" | "documentation" | "other",
-  "complexity": "trivial" | "low" | "medium" | "high" | "critical"
+  "complexity": "trivial" | "low" | "medium" | "high" | "critical",
+  "roadmap_position": "now" | "next" | "later" | "unplanned" | null,
+  "roadmap_dependencies": ["item-name"] | []
 }
 ```
+
+- `roadmap_position` and `roadmap_dependencies`: only populated if `docs/roadmap.md` is provided in context. If no roadmap: set `roadmap_position: null` and `roadmap_dependencies: []`.
+- Match the feature description against roadmap item names/descriptions. Use best-effort keyword matching.
 
 No markdown wrapper. No explanation. No preamble. Only the JSON.
 

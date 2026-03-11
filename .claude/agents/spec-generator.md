@@ -73,6 +73,7 @@ The orchestrator passes you:
 - `project_path`: string - absolute path to the project root
 - `memory_context`: project conventions and learned patterns extracted via `sdd_memory_read` (max 500 tokens each)
 - `signals[]`: any signals on the feature, filtered by type
+- `roadmap_context` (optional): Now + Next sections from `docs/roadmap.md`, plus `roadmap_position` and `roadmap_dependencies` from triage
 
 ## Output
 
@@ -90,7 +91,12 @@ A file `specs/{feature_id}/spec.md` with the following 11-section structure:
 8. **Data Models** - entities with typed fields, relationships `<!-- contract: interface-immutable, implementation-negotiable -->`
 9. **API Contracts** - endpoints with request/response shapes and error codes `<!-- contract: interface-immutable, implementation-negotiable -->`
 10. **Edge Cases & Error Handling** - EC-NNN IDs, minimum 3, covering invalid input, empty state, concurrent access where applicable `<!-- contract: immutable -->`
-11. **Open Questions** - anything unresolved `<!-- status: unresolved -->`
+11. **Roadmap Context** (only if `roadmap_context` was provided) `<!-- contract: informational -->`
+    - **Position**: Now / Next / Later / Unplanned (from triage)
+    - **What comes after**: list 1-2 roadmap items that follow this feature, so interfaces/contracts can anticipate them
+    - **Non-goals from roadmap**: items explicitly deferred to Later that this spec must NOT attempt (reference them with "[deferred to Later]")
+    - If no roadmap context provided: omit this section entirely
+12. **Open Questions** - anything unresolved `<!-- status: unresolved -->`
 
 When generating the spec, include the contract marker as an HTML comment at the start of each section (right after the ## heading). Example:
 ```markdown

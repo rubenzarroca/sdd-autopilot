@@ -90,7 +90,19 @@ Features:
 
    If `history.jsonl` doesn't exist, skip this section entirely.
 
-7. If no features exist, report: "No features yet. Run `/sdd-auto:run \"feature description\"` to start."
+7. **Roadmap progress** — If `docs/roadmap.md` exists at the project path:
+
+   - Read the file and extract items from Now, Next, and Later sections (each `- **item-name**:` line)
+   - Cross-reference against completed features in `state.json` (features with `state == "merged"`): match by feature name substring against roadmap item names (case-insensitive)
+   - Display a one-line summary:
+     ```
+     Roadmap: {completed}/{total} Now items done, {started}/{total} Next items started
+     ```
+     Where "started" means the feature exists in state.json in any non-terminal state.
+   - If no matches can be determined, show: `Roadmap: present (docs/roadmap.md) — no feature matches detected`
+   - If `docs/roadmap.md` doesn't exist: skip this section entirely.
+
+8. If no features exist, report: "No features yet. Run `/sdd-auto:run \"feature description\"` to start."
 
 ## Error handling
 

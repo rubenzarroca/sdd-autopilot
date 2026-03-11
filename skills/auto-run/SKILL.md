@@ -138,7 +138,7 @@ Every error shown to the developer must: (1) start with ❌, (2) say WHAT happen
 
    a. **Constitution** — read `constitution.md` from the project root. If exists: extract constraints as an array of rules. If not exists: set `project_constraints` to empty array.
 
-   b. **PRD** — read `specs/prd.md`. If exists: store full text as `project_prd`. If not exists: set to null.
+   b. **PRD** — read `docs/prd.md`. If exists: store full text as `project_prd`. If not exists: check legacy path `specs/prd.md`. If found at legacy path: use it, but report "ℹ️ PRD found at specs/prd.md — consider moving to docs/prd.md for better project organization." If neither exists: set `project_prd` to null.
 
    c. **Available MCP servers** — detect external service capabilities by checking which `mcp__*` tools are available. Build `available_services` map (supabase, vercel, stripe, github, etc.). Pass to subagent briefs when non-empty.
 
@@ -217,10 +217,11 @@ If `context7` MCP tools are available, append to implementation-engine and verif
 
 When spawning a subagent, append context sections based on agent type:
 
-- **spec-generator, plan-architect, task-decomposer**: receive PRD + constraints + `worktree_path`
+- **spec-generator, plan-architect, task-decomposer**: receive PRD + constraints + `worktree_path`. Additionally, **spec-generator** receives `docs/roadmap.md` Now + Next sections only (not Later) if the file exists, plus `roadmap_position` and `roadmap_dependencies` from triage output.
 - **implementation-engine, opus-coach**: receive constraints only (with "AUTHORITATIVE" framing)
 - **implementation-engine, verification-engine**: receive `available_services` (MCP)
-- **haiku-triage, haiku-validator, opus-meta-reviewer**: no injection
+- **haiku-triage**: if `docs/roadmap.md` exists at `project_path`, read and append its content (full file, ~200 tokens). No other injection.
+- **haiku-validator, opus-meta-reviewer**: no injection
 
 ### Fix loop protocol (verify failures -> fix_loop)
 

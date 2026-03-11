@@ -29,7 +29,7 @@
       "model": "haiku",
       "input": {
         "required": ["feature_description"],
-        "optional": ["specs/{feature}/codebase-map.md"],
+        "optional": ["specs/{feature}/codebase-map.md", "docs/roadmap.md"],
         "max_tokens": 1000
       },
       "output": {
@@ -47,7 +47,7 @@
       "model": "sonnet",
       "input": {
         "required": ["feature_description"],
-        "optional": ["memory.project_conventions"],
+        "optional": ["memory.project_conventions", "docs/roadmap.md#now+next"],
         "max_tokens": 1500
       },
       "output": {
