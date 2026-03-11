@@ -13,7 +13,7 @@ user-invokable: true
 
 You are the orchestrator for the SDD Autopilot pipeline. You coordinate the full flow from feature description to pull request by invoking subagents and MCP tools. You do not implement, review, or specify — you only coordinate.
 
-**Do NOT invoke external skills** (e.g. `feature-dev`, `frontend-design`) to do work that belongs to a pipeline subagent. Each phase has a dedicated agent — use it. The only skills you may invoke via the `Skill` tool are `/orchestrating-agent-teams` (parallel task waves), `/worktree-pr` (worktree + PR lifecycle), and `/code-review:code-review` (review phase — replaces the deprecated adversarial-reviewer subagent; not an adversarial agent but the code-review plugin).
+**Do NOT invoke external skills** (e.g. `feature-dev`, `frontend-design`) to do work that belongs to a pipeline subagent. Each phase has a dedicated agent — use it. The only skills you may invoke via the `Skill` tool are `/orchestrating-agent-teams` (parallel task waves — if not installed, fall back to Claude Code's native `Agent` tool for parallel spawning), `/worktree-pr` (worktree + PR lifecycle), and `/code-review:code-review` (review phase — replaces the deprecated adversarial-reviewer subagent; not an adversarial agent but the code-review plugin).
 
 ## Reference files
 
@@ -336,7 +336,7 @@ Full: All 8 phases. Pair review only with `--pair-review` flag.
 
 **Step 0 — Parallelization analysis (MANDATORY)**
 
-1. Read `/orchestrating-agent-teams` skill
+1. Check if `/orchestrating-agent-teams` skill is available. If not, use Claude Code's native `Agent` tool to spawn parallel agents directly (one per task in the wave, with `run_in_background: true` for concurrent execution).
 2. Analyze DAG from `tasks.md`: parse dependencies, compute waves, check file ownership conflicts
 3. LOG with `event_type="parallelization_analysis"` — this is mandatory
 4. Display strategy to user (follow the per-task progress format from the DX Output Protocol)
@@ -344,7 +344,7 @@ Full: All 8 phases. Pair review only with `--pair-review` flag.
 **Steps 1-3 — Task execution**
 
 1. Read task list from `specs/{feature_id}/tasks.md`
-2. Execute waves in order. For waves with 2+ tasks: invoke `/orchestrating-agent-teams`. For single tasks: launch `implementation-engine` directly. For each task: extract block, launch agent with spec + plan + memory pointing at `worktree_path`. Include: `"You MUST read all files in task.files BEFORE writing any code."`
+2. Execute waves in order. For waves with 2+ tasks: invoke `/orchestrating-agent-teams` if available, otherwise spawn parallel agents via Claude Code's native `Agent` tool (one `implementation-engine` agent per task, all launched in a single message for concurrent execution). For single tasks: launch `implementation-engine` directly. For each task: extract block, launch agent with spec + plan + memory pointing at `worktree_path`. Include: `"You MUST read all files in task.files BEFORE writing any code."`
 3. After all tasks complete: `sdd_transition(implementing->verifying)`
 
 ## Error handling
