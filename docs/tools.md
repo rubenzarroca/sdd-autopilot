@@ -51,8 +51,11 @@ SDD Autopilot exposes 36 MCP tools organized into four categories. All tools are
 | `sdd_run_retro` | Generate structured retro report for a completed run |
 | `sdd_phase_confidence` | Assign confidence score to phase output |
 
-## Infrastructure (1 tool)
+## Infrastructure (4 tools)
 
 | Tool | Purpose |
 |------|---------|
 | `sdd_get_manifest` | Get SHA-256 hash of tool definitions for version drift detection |
+| `sdd_propose_tool` | Propose a new MCP tool (self-evolution: agent detects a missing capability) |
+| `sdd_review_tool_proposal` | Review a tool proposal for overlap, coherence, and necessity |
+| `sdd_generate_tool_prompt` | Generate implementation prompt for a validated tool proposal |

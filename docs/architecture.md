@@ -188,7 +188,7 @@ sdd-autopilot/
 |   |   +-- utils.ts         # Shared utilities (fileExists, parseJsonl)
 |   |   +-- contracts.json   # Pipeline phase definitions (single source of truth)
 |   +-- tests/
-|   |   +-- e2e/             # Behavioral pipeline tests (20 tests)
+|   |   +-- e2e/             # Behavioral pipeline tests (23 tests)
 |   +-- test-e2e.mjs         # Mechanical tests (270+ assertions, no API calls)
 |   +-- scripts/
 |   |   +-- compute-tools-hash.mjs  # SHA-256 hash of tool definitions

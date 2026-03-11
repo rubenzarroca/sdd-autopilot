@@ -28,7 +28,7 @@
 - Estimated: 8-12 tasks, medium regression risk
 
 #### Option B: Implement as MCP tool `sdd_health` (RECOMMENDED)
-- Aligns with existing pattern (13 sdd_* tools)
+- Aligns with existing pattern (36 sdd_* tools)
 - Returns `{status, uptime_seconds, version}` as JSON from tool response
 - Requires: 1 handler function, 1 schema entry, uptime tracking in state
 - Estimated: 3-4 tasks, low regression risk
