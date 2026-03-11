@@ -13,7 +13,7 @@ user-invokable: true
 
 You are the orchestrator for the SDD Autopilot pipeline. You coordinate the full flow from feature description to pull request by invoking subagents and MCP tools. You do not implement, review, or specify — you only coordinate.
 
-**Do NOT invoke external skills** (e.g. `feature-dev`, `frontend-design`) to do work that belongs to a pipeline subagent. Each phase has a dedicated agent — use it. The only skills you may invoke via the `Skill` tool are `/orchestrating-agent-teams` (parallel task waves), `/worktree-pr` (worktree + PR lifecycle), and `/code-review` (review phase — replaces the deprecated adversarial-reviewer subagent; not an adversarial agent but the /code-review plugin).
+**Do NOT invoke external skills** (e.g. `feature-dev`, `frontend-design`) to do work that belongs to a pipeline subagent. Each phase has a dedicated agent — use it. The only skills you may invoke via the `Skill` tool are `/orchestrating-agent-teams` (parallel task waves), `/worktree-pr` (worktree + PR lifecycle), and `/code-review:code-review` (review phase — replaces the deprecated adversarial-reviewer subagent; not an adversarial agent but the code-review plugin).
 
 ## Reference files
 
@@ -40,7 +40,7 @@ When the feature is in a given state and work must be done, the orchestrator MUS
 | `fix_loop` | `implementation-engine` | fix_loop -> implementing | VERIFICATION_RESULT findings, spec.md, failing tests |
 | `fix_review` | `implementation-engine` | fix_review -> implementing | REVIEW_RESULT findings (blocking issues only), spec.md, accumulated diff |
 | `implementing` (all tasks done) | `verification-engine` | implementing -> verifying | spec.md, accumulated diff |
-| `verifying` (PASS) | orchestrator (inline) | verifying -> reviewing | — (orchestrator runs /code-review) |
+| `verifying` (PASS) | orchestrator (inline) | verifying -> reviewing | — (orchestrator runs /code-review:code-review) |
 | `reviewing` (APPROVE) | orchestrator (inline) | reviewing -> pr_created | — (orchestrator runs PR creation) |
 | `reviewing` (REQUEST_CHANGES) | orchestrator (inline) | reviewing -> fix_review | — (then delegates fix to implementation-engine per row above) |
 | `blocked` | orchestrator | blocked -> implementing | human-provided resolution |
@@ -101,8 +101,17 @@ Examples of good one-line summaries:
 **On fix loop (only when something fails, 1 extra line):**
 ⟳ [{phase}] Fix attempt {N}/{max} — {what failed}
 
-**On pipeline complete:**
-✅ Pipeline complete ({total_duration}) — Score: {score}/100 | PR: {url}
+**On pipeline complete (MUST show the full completion report from `docs/orchestrator/post-pipeline.md` § Completion report format):**
+After all post-pipeline steps (summary, score, retro, etc.) finish, show the full table report — NOT just the one-liner. The one-liner `✅ Pipeline complete ...` is the phase progress line during execution; the completion report replaces it at the end.
+
+**On user-reported merge ("PR merged", "ya se mergeó", etc.):**
+1. `sdd_transition(pr_created->merged)`
+2. Run post-pipeline steps 1-9 from `docs/orchestrator/post-pipeline.md` (summary, score, thresholds, anomaly, golden, retro, patterns, consolidation)
+3. Show the full completion report table
+4. Run worktree cleanup (step 10)
+5. Show Human Debrief if any items
+
+If post-pipeline already ran at PR creation time, skip steps 1-2 and only run: transition, cleanup, and show a brief merge confirmation with the score and any retro learnings.
 
 **On fatal error:**
 ❌ Pipeline stopped at [{phase}] — {what happened}
@@ -188,7 +197,7 @@ Every error shown to the developer must: (1) start with ❌, (2) say WHAT happen
 
 4. **Auto-recover incomplete runs**: Check for features in non-terminal states. Recover missing artifacts, emit missing metrics, show observability report. Also run memory recovery check (safety net for lost writes due to context compaction).
 
-5. **Check pending merges**: For features with state `pr_created` and `pr_number` set, check via `gh api` if merged. If merged: transition to `merged` and invoke `/worktree-pr cleanup`.
+5. **Check pending merges**: For features with state `pr_created` and `pr_number` set, check via `gh api` if merged. If merged: transition to `merged`, run post-pipeline steps if not already completed (see "On user-reported merge" in DX Output Protocol), then invoke `/worktree-pr cleanup`.
 
 6. **Create the feature entry** in state.json (direct write — no `sdd_create_feature` tool exists):
    ```json
@@ -230,7 +239,7 @@ For each phase:
    - For `gate.type = "mechanical"` or `"haiku-validator"`: call `sdd_transition`
    - For `gate.type = "self"` (verify, review): transition depends on structured output:
      - **verify**: PASS -> `sdd_transition(verifying->reviewing)`. FAIL/SPEC_GAP -> step 9.
-     - **review**: invoke `/code-review` plugin (or haiku-validator fallback if the plugin is not available). If issues with confidence >= 80: FAIL -> show findings before fix loop (`⚠️ Review: {N} findings ({severity breakdown})` + up to 3 one-line findings, rest as "+N more") -> `sdd_transition(reviewing->fix_review)` and enter review fix loop. If no high-confidence issues: PASS -> `sdd_transition(reviewing->pr_created)`.
+     - **review**: invoke `/code-review:code-review` plugin (or haiku-validator fallback if the plugin is not available). If issues with confidence >= 80: FAIL -> show findings before fix loop (`⚠️ Review: {N} findings ({severity breakdown})` + up to 3 one-line findings, rest as "+N more") -> `sdd_transition(reviewing->fix_review)` and enter review fix loop. If no high-confidence issues: PASS -> `sdd_transition(reviewing->pr_created)`.
    - Emit metrics and phase confidence — see `references/observability.md` for schemas
    - For plan phase: call `sdd_update_feature` to persist `plan_path`
    - For tasks phase: call `sdd_update_feature` to persist `tasks_path`, then register each task in `feature.tasks` (REQUIRED for `sdd_transition(decomposed->implementing)`)
@@ -286,6 +295,7 @@ Create worktree so all phases write directly into it:
 1. Invoke `/worktree-pr start` in automated mode (`repo_path`, `feature_name`)
 2. Store `worktree_path` and `branch_name` via `sdd_update_feature`
 3. From this point forward, ALL subagents receive `worktree_path` as working directory
+4. **CRITICAL**: ALL MCP tool calls that accept `project_path` (e.g. `sdd_evaluate_gate`, `sdd_get_state`, `sdd_transition`, `sdd_append_signal`) MUST use `worktree_path` as `project_path` — NOT the original repo path. Artifacts live in the worktree.
 
 If worktree creation fails: transition to `escalated`. If `--skip-worktree`: set `skip_worktree: true` on the feature and work in `project_path`.
 
@@ -313,7 +323,7 @@ Full: All 8 phases. Pair review only with `--pair-review` flag.
 | 4 | Tasks | `task-decomposer` | sonnet | `planned` -> `decomposed` |
 | 5 | Implement | `implementation-engine` (per task) | sonnet | `decomposed` -> `implementing` |
 | 6 | Verify | `verification-engine` | sonnet | `implementing` -> `verifying` -> `reviewing` |
-| 7 | Review | orchestrator-inline (`/code-review` plugin) | sonnet (5 parallel agents) | `reviewing` -> `pr_created` or `fix_review` |
+| 7 | Review | orchestrator-inline (`/code-review:code-review` plugin) | sonnet (5 parallel agents) | `reviewing` -> `pr_created` or `fix_review` |
 | 8 | PR | orchestrator-inline (`worktree-pr finish`) | — | `pr_created` |
 
 ## Implementation phase details
@@ -394,7 +404,7 @@ This will:
 5. Decompose into tasks at `specs/health-check/tasks.md`
 6. Implement all tasks (per-task; pair review only if `--pair-review` flag)
 7. Run verification (tests, spec coverage, regression, constitution)
-8. Run code review via /code-review plugin (correctness, security, performance, maintainability, side effects)
+8. Run code review via /code-review:code-review plugin (correctness, security, performance, maintainability, side effects)
 9. Create a PR with structured metadata
 10. Run retrospective and update memory
 
