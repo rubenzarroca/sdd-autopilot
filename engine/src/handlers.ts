@@ -615,7 +615,7 @@ export async function handleMemoryWrite(params: {
       await mkdir(runDir, { recursive: true });
       const signalsPath = join(runDir, "signals.jsonl");
       const extractionWarning = {
-        signal_type: "extraction_filter_warning",
+        signal_type: "extraction_filter_rejected",
         reason: extraction.reason,
         section: params.section,
         content_preview: params.content.slice(0, 100),
@@ -625,6 +625,21 @@ export async function handleMemoryWrite(params: {
       await atomicAppendJSONL(signalsPath, extractionWarning);
     }
     return { written: false, action: "rejected", reason: extraction.reason, timestamp, confidence: Math.max(0, Math.min(1, params.confidence ?? 0.5)) };
+  }
+
+  // Log soft warning for warn-only sections (content allowed but doesn't match typical patterns)
+  if (extraction.warning && params.feature_id) {
+    const runDir = resolve(params.project_path, ".sdd", "runs", params.feature_id);
+    await mkdir(runDir, { recursive: true });
+    const signalsPath = join(runDir, "signals.jsonl");
+    await atomicAppendJSONL(signalsPath, {
+      signal_type: "extraction_filter_warning",
+      reason: extraction.warning,
+      section: params.section,
+      content_preview: params.content.slice(0, 100),
+      agent: params.agent ?? "unknown",
+      timestamp,
+    });
   }
 
   // GAP-02: Build provenance metadata comment

@@ -87,11 +87,20 @@ const SECTION_PATTERNS: Record<string, RegExp[]> = {
 };
 SECTION_PATTERNS.cross_project_patterns = SECTION_PATTERNS.learned_patterns;
 
-export function validateExtractionFilter(content: string, section: string): { valid: boolean; reason?: string } {
+// Sections where extraction filter warns but does NOT reject.
+// These sections receive content from validated upstream tools (e.g. sdd_run_retro)
+// so blocking on prose format is too strict.
+const WARN_ONLY_SECTIONS = new Set(["learned_patterns", "cross_project_patterns"]);
+
+export function validateExtractionFilter(content: string, section: string): { valid: boolean; reason?: string; warning?: string } {
   const patterns = SECTION_PATTERNS[section];
   if (!patterns) return { valid: true }; // run_history, agent_performance: no filter
   for (const p of patterns) {
     if (p.test(content)) return { valid: true };
+  }
+  // For warn-only sections, allow the write but surface a warning
+  if (WARN_ONLY_SECTIONS.has(section)) {
+    return { valid: true, warning: `Content does not match typical patterns for section ${section} — allowed (warn-only)` };
   }
   return { valid: false, reason: `Content does not match expected patterns for section ${section}` };
 }
