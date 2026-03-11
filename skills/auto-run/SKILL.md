@@ -5,7 +5,7 @@ description: >
   Zero stops, fully autonomous. Orchestrates subagents via Claude Code native agent system and MCP tools.
   Use when the user says "auto run", "autopilot", "sdd auto", "build this feature autonomously",
   or runs /sdd-auto:run.
-argument-hint: '"<feature description>" [--skip-worktree] [--skip-pr] [--recover <feature_id>]'
+argument-hint: '[<spec-name>] ["<brief>"] [--skip-worktree] [--skip-pr] [--recover <feature_id>]'
 user-invokable: true
 ---
 
@@ -144,9 +144,45 @@ Every error shown to the developer must: (1) start with ❌, (2) say WHAT happen
 
    **Authority hierarchy:** `constitution.md > CLAUDE.md (auto-loaded) > memory_context > agent defaults`
 
-1. **Parse feature description** from `$ARGUMENTS`. If empty, ask the user what feature they want to build.
+1. **Parse structured arguments** from `$ARGUMENTS`.
 
-2. **Determine project path and run_id**. Use CWD unless specified. Generate `run_id` as `{feature_id}-{unix-timestamp-ms}`.
+   Arguments follow a progressive-disclosure pattern:
+
+   ```
+   # Tier 1 (recommended): spec-name + brief
+   /sdd-auto:run my-feature "Add the thing that does the stuff"
+
+   # Tier 2: spec-name only (prompt for brief)
+   /sdd-auto:run my-feature
+
+   # Tier 3: no args (prompt for both — backwards compatible)
+   /sdd-auto:run
+   ```
+
+   **Parsing rules:**
+   - Flags (`--skip-worktree`, `--skip-pr`, `--recover <id>`) are extracted first.
+   - After flag extraction, the remaining positional args are: `[spec-name] [brief]`.
+   - If the first positional arg is a quoted string (starts with `"`), treat it as a legacy feature description: slugify it to produce `spec_name` and use the full string as `brief`.
+   - If the first positional arg is an unquoted kebab-case token (lowercase, hyphens, no spaces, max 50 chars), it is `spec_name`. The next positional arg (if quoted) is `brief`.
+   - If `spec_name` is provided but contains spaces or uppercase: slugify it (lowercase, replace spaces/underscores with hyphens, strip non-alphanumeric except hyphens, truncate to 50 chars). Confirm the slugified name with the user: `◈ Spec name: {slug} (from "{original}") — OK?`
+   - If `spec_name` is missing: ask the user: `What should this feature be called? (kebab-case slug, e.g. auth-oauth)`
+   - If `brief` is missing: ask the user: `Describe this feature in one sentence:`
+   - **Gentle nudge** (show once, only for Tier 2/3): `💡 Tip: next time, run: /sdd-auto:run {spec_name} "{brief}"`
+
+2. **Startup echo** (after parsing, before triage):
+
+   ```
+   ◈ Feature: {spec_name}
+   ◈ Brief: {brief}
+   ◈ Context: {context_summary}
+   ◈ Mode: pending (triage will determine)
+   ◈
+   ◈ Starting triage...
+   ```
+
+   Where `{context_summary}` lists loaded files: `PRD loaded · Constitution loaded · Roadmap loaded (Now: {N} items)` — only mention files that exist, skip those that don't. This is output only — no tools, no state changes.
+
+3. **Determine project path and run_id**. Use CWD unless specified. Generate `run_id` as `{feature_id}-{unix-timestamp-ms}`.
 
 3. **Auto-initialize if needed**: Call `sdd_get_state`. If not initialized, silently create `.sdd/state.json` with version 2.0.0 schema and continue. Report: "Project not initialized — auto-initialized at {path}."
 
@@ -156,9 +192,10 @@ Every error shown to the developer must: (1) start with ❌, (2) say WHAT happen
 
 6. **Create the feature entry** in state.json (direct write — no `sdd_create_feature` tool exists):
    ```json
-   "{feature-id}": {
+   "{spec_name}": {
      "state": "draft",
-     "spec_path": "specs/{feature-id}/spec.md",
+     "spec_path": "specs/{spec_name}/spec.md",
+     "brief": "{brief}",
      "transitions": [],
      "tasks": {},
      "signals": [],
@@ -168,7 +205,7 @@ Every error shown to the developer must: (1) start with ❌, (2) say WHAT happen
      "fix_review_attempts": 0
    }
    ```
-   Also set `"active_feature": "{feature-id}"`. Feature ID: lowercase, hyphen-separated, max 40 chars. Confirm with `sdd_get_state`.
+   Use `spec_name` from step 1 as the feature ID. Also set `"active_feature": "{spec_name}"`. Confirm with `sdd_get_state`.
 
 7. **Execute the pipeline phases** in order (see below).
 
@@ -220,7 +257,7 @@ When spawning a subagent, append context sections based on agent type:
 - **spec-generator, plan-architect, task-decomposer**: receive PRD + constraints + `worktree_path`. Additionally, **spec-generator** receives `docs/roadmap.md` Now + Next sections only (not Later) if the file exists, plus `roadmap_position` and `roadmap_dependencies` from triage output.
 - **implementation-engine, opus-coach**: receive constraints only (with "AUTHORITATIVE" framing)
 - **implementation-engine, verification-engine**: receive `available_services` (MCP)
-- **haiku-triage**: if `docs/roadmap.md` exists at `project_path`, read and append its content (full file, ~200 tokens). No other injection.
+- **haiku-triage**: receives `spec_name` and `brief` from step 1 as `feature_description`. If `docs/roadmap.md` exists at `project_path`, read and append its content (full file, ~200 tokens).
 - **haiku-validator, opus-meta-reviewer**: no injection
 
 ### Fix loop protocol (verify failures -> fix_loop)
@@ -347,18 +384,19 @@ After the pipeline, user may request changes. Track each iteration:
 
 ## Example
 
-User: `/sdd-auto:run "Add a health check endpoint that returns server status and uptime"`
+User: `/sdd-auto:run health-check "Add a health check endpoint that returns server status and uptime"`
 
 This will:
-1. Triage: estimate complexity and risk
-2. Generate a spec at `specs/health-check-endpoint/spec.md`
-3. Generate a plan at `specs/health-check-endpoint/plan.md` + ADR
-4. Decompose into tasks at `specs/health-check-endpoint/tasks.md`
-5. Implement all tasks (per-task; pair review only if `--pair-review` flag)
-6. Run verification (tests, spec coverage, regression, constitution)
-7. Run code review via /code-review plugin (correctness, security, performance, maintainability, side effects)
-8. Create a PR with structured metadata
-9. Run retrospective and update memory
+1. Echo: `◈ Feature: health-check` / `◈ Brief: Add a health check endpoint...`
+2. Triage: estimate complexity and risk
+3. Generate a spec at `specs/health-check/spec.md`
+4. Generate a plan at `specs/health-check/plan.md` + ADR
+5. Decompose into tasks at `specs/health-check/tasks.md`
+6. Implement all tasks (per-task; pair review only if `--pair-review` flag)
+7. Run verification (tests, spec coverage, regression, constitution)
+8. Run code review via /code-review plugin (correctness, security, performance, maintainability, side effects)
+9. Create a PR with structured metadata
+10. Run retrospective and update memory
 
 $ARGUMENTS
 

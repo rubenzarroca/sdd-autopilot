@@ -29,7 +29,7 @@
       "model": "haiku",
       "input": {
         "required": ["feature_description"],
-        "optional": ["specs/{feature}/codebase-map.md", "docs/roadmap.md"],
+        "optional": ["spec_name", "brief", "roadmap_position", "specs/{feature}/codebase-map.md", "docs/roadmap.md"],
         "max_tokens": 1000
       },
       "output": {

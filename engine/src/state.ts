@@ -299,7 +299,7 @@ export class StateManager {
 
   async updateFeatureField(
     featureName: string,
-    updates: Partial<Pick<FeatureEntry, "plan_path" | "tasks_path" | "worktree_path" | "branch" | "blocked_reason" | "escalation_reason" | "awaiting_input_reason" | "pr_url" | "pr_number" | "skip_worktree">>,
+    updates: Partial<Pick<FeatureEntry, "plan_path" | "tasks_path" | "worktree_path" | "branch" | "blocked_reason" | "escalation_reason" | "awaiting_input_reason" | "pr_url" | "pr_number" | "skip_worktree" | "brief">>,
   ): Promise<void> {
     const state = await this.read();
     const feature = state.features[featureName];

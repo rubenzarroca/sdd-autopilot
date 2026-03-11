@@ -70,6 +70,7 @@ export interface TaskStatus {
 export interface FeatureEntry {
   state: FeatureState;
   spec_path: string;
+  brief?: string;
   plan_path?: string;
   tasks_path?: string;
   worktree_path?: string;
