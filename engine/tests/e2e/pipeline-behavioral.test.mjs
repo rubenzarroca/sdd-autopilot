@@ -14,6 +14,7 @@ const { handleGetState, handleTransition, handleEvaluateGate, handleLogEvent,
         handleUpdateTask, handleUpdateFeature, handleAppendSignal } = await import('../../build/handlers.js');
 const { handleEmitMetrics, handleGetRunSummary } = await import('../../build/observability.js');
 const { handleComputeScore, handleRunRetro } = await import('../../build/metacognition.js');
+const { StateManager } = await import('../../build/state.js');
 
 const FIXTURE_DIR = resolve(import.meta.dirname, '..', 'fixtures', 'sample-project');
 
@@ -51,6 +52,7 @@ describe('Pipeline Behavioral Test', () => {
       },
     };
     writeFileSync(join(sddDir, 'state.json'), JSON.stringify(state, null, 2));
+    StateManager.clearCache();
 
     // Create spec file so gate checks can find it
     const specDir = join(projectPath, 'specs', featureId);
@@ -144,6 +146,7 @@ describe('Pipeline Behavioral Test', () => {
     };
     state.features[featureId].skip_worktree = true; // simulate --skip-worktree for test
     writeFileSync(statePath, JSON.stringify(state, null, 2));
+    StateManager.clearCache();
 
     const result = await handleTransition({
       project_path: projectPath,
@@ -226,6 +229,7 @@ describe('Pipeline Behavioral Test', () => {
       fix_review_attempts: 0,
     };
     writeFileSync(statePath, JSON.stringify(state, null, 2));
+    StateManager.clearCache();
 
     const result = await handleTransition({
       project_path: projectPath,
@@ -261,6 +265,7 @@ describe('Pipeline Behavioral Test', () => {
       fix_review_attempts: 0,
     };
     writeFileSync(statePath, JSON.stringify(state, null, 2));
+    StateManager.clearCache();
 
     const result = await handleTransition({
       project_path: projectPath,
@@ -291,6 +296,7 @@ describe('Pipeline Behavioral Test', () => {
       skip_worktree: true,
     };
     writeFileSync(statePath, JSON.stringify(state, null, 2));
+    StateManager.clearCache();
 
     const result = await handleTransition({
       project_path: projectPath,
@@ -320,6 +326,7 @@ describe('Pipeline Behavioral Test', () => {
       skip_worktree: true,
     };
     writeFileSync(statePath, JSON.stringify(state, null, 2));
+    StateManager.clearCache();
 
     const result = await handleTransition({
       project_path: projectPath,

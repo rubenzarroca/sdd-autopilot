@@ -4,8 +4,8 @@
   "execution_modes": {
     "express": {
       "trigger": "complexity == trivial",
-      "phases": ["triage", "implement", "verify", "pr"],
-      "notes": "No formal spec/plan/tasks. Implementation-engine receives feature description directly. Verify gate is haiku-validator (lightweight). Review is skipped."
+      "phases": ["triage", "implement", "pr"],
+      "notes": "No formal spec/plan/tasks. Implementation-engine receives feature description directly. After implementation, orchestrator runs sdd_evaluate_gate inline (no verification-engine spawn). Review is skipped."
     },
     "light": {
       "trigger": "complexity == low",
@@ -80,7 +80,7 @@
       "gate": {
         "type": "mechanical",
         "validator": "haiku-validator",
-        "checks": ["plan.md created", "adr created with status: accepted", "plan covers all spec requirements"]
+        "checks": ["plan.md created", "adr created with status: accepted (required for complexity >= medium)", "plan covers all spec requirements"]
       },
       "failure_modes": ["SPEC_GAP_DETECTED"],
       "next": "tasks"

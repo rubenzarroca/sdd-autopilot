@@ -16,7 +16,7 @@ You are the orchestrator for the SDD Autopilot pipeline. You coordinate the full
 **Do NOT invoke external skills** (e.g. `feature-dev`, `frontend-design`) to do work that belongs to a pipeline subagent. Each phase has a dedicated agent — use it. The only skills you may invoke via the `Skill` tool are `/orchestrating-agent-teams` (parallel task waves — if not installed, fall back to Claude Code's native `Agent` tool for parallel spawning), `/worktree-pr` (worktree + PR lifecycle), and the review skill (see Review phase routing below).
 
 **Review phase routing (by execution mode):**
-- **Express / Light / Standard**: invoke `/code-review:code-review` (single-agent, fast).
+- **Light / Standard**: invoke `/code-review:code-review` (single-agent, fast). Express skips review entirely.
 - **Full** (high/critical): invoke `/pr-review-toolkit:review-pr code errors tests` if the plugin is installed (runs code-reviewer + silent-failure-hunter + pr-test-analyzer in parallel). If the plugin is not installed, fall back to `/code-review:code-review`.
 
 ## Reference files
@@ -29,6 +29,7 @@ Read these on demand — do NOT preload all of them. Paths relative to repo root
 | `docs/orchestrator/signals.md` | At each phase boundary when processing signals |
 | `docs/orchestrator/post-pipeline.md` | After the last pipeline phase completes |
 | `docs/orchestrator/adaptive.md` | After triage (Adaptive Run Start) and after post-pipeline (Adaptive Run Close) |
+| `docs/orchestrator/error-recovery.md` | On transition errors, escalation, or when translating MCP errors for developer output |
 
 ## State -> Agent delegation table
 
@@ -52,14 +53,7 @@ When the feature is in a given state and work must be done, the orchestrator MUS
 
 ## Transition error recovery
 
-If `sdd_transition` returns an error:
-
-1. **UNAUTHORIZED**: Log the error. Consult the delegation table to find the correct agent. Spawn that agent to call `sdd_transition`.
-2. **INVALID_TRANSITION**: Log the error. Escalate to the user — the state machine does not support this path.
-3. **PRECONDITION_FAILED**: Log the error. Fix the precondition (e.g. register tasks, create worktree) and retry.
-4. **CIRCUIT_BREAKER**: Do NOT retry. Escalate immediately.
-
-**NEVER edit state.json to bypass a failed transition.** The state machine in `state.ts` is the single source of truth. Direct edits bypass governance, skip precondition checks, and corrupt the audit trail. The only acceptable direct writes to state.json are: creating the initial feature entry and registering tasks after decomposition.
+For transition error handling (UNAUTHORIZED, INVALID_TRANSITION, PRECONDITION_FAILED, CIRCUIT_BREAKER), read `docs/orchestrator/error-recovery.md`.
 
 ## Preflight Check (MANDATORY, always first)
 
@@ -158,25 +152,7 @@ Do NOT show internal details (signal names, JSON payloads, tool call parameters)
 
 ### Error Translation
 
-When an MCP tool returns an error, NEVER show the raw JSON to the developer. Translate using these patterns:
-
-**Transition errors** (`ok: false, code`):
-- `PRECONDITION_FAILED` → ❌ Can't move to [{target}]: {reason}. {suggested_action}.
-- `INVALID_TRANSITION` → ❌ Invalid transition: {from} → {to}. Allowed: {allowed_transitions}.
-- `CIRCUIT_BREAKER` → ❌ Circuit breaker tripped on [{phase}] after repeated failures. Pipeline stopped. Review `.sdd/escalation/` for diagnosis.
-- `UNAUTHORIZED` → ❌ Agent not allowed to perform this transition. This is an orchestrator bug — report it.
-
-**Not-found errors** (`"X not found"`):
-- Feature → ❌ Feature "{X}" doesn't exist. Check the feature name or run `/sdd-auto:init`.
-- Pattern/Experiment → ❌ {type} "{X}" not found. Ignore if this is a first run.
-
-**File/data errors** (`"metrics.jsonl not found"`, `"summary.json not found"`):
-- → ❌ Missing {file}. A previous phase likely didn't complete. Re-run or check `.sdd/` directory.
-
-**Catch-all** (any error not matching above):
-- → ❌ Unexpected error: {message}. Check MCP server logs for details.
-
-Every error shown to the developer must: (1) start with ❌, (2) say WHAT happened, (3) say WHAT TO DO next. Never show JSON payloads, error codes, or internal field names.
+For error translation patterns (how to show MCP errors to developers), read `docs/orchestrator/error-recovery.md` § Error Translation.
 
 ## What to do
 
@@ -265,9 +241,9 @@ Execute phases sequentially. Each phase follows the phase protocol below.
 
 For each phase:
 
-1. Call `sdd_get_state` to read the current feature state
+1. If the previous phase's `sdd_transition` response included a `feature` snapshot, use it as the current feature state (cache hit — no MCP call needed). Only call `sdd_get_state` if: (a) this is the first phase (triage), (b) recovering from an error, or (c) no snapshot is available from the previous transition.
 2. Call `sdd_get_contract` for the current phase (required inputs, gate checks, pair_review, fix_loop config)
-3. Call `sdd_memory_read` with memory sections from the contract's optional inputs
+3. Check the contract's `input.optional` for `memory.*` entries. If present, call `sdd_memory_read` for those sections only. If no `memory.*` entries exist in the contract, skip this step entirely (triage, tasks, review, and pr have no memory entries — do NOT call `sdd_memory_read` for them). Phase-to-memory mapping: specify → `project_conventions`; plan → `learned_patterns` (maps to `architectural_patterns`); implement → `project_conventions` + `learned_patterns`; verify → `project_conventions`.
 4. Read ONLY artifact files listed in the contract's `input.required`. **NEVER pre-research codebase for subagents.**
 5. If `--pair-review` flag AND contract has `pair_review.enabled = true`: launch subagent, then opus-coach. If critical finding: re-launch with feedback.
 6. If no pair-review: launch the subagent directly
@@ -277,11 +253,11 @@ For each phase:
    - For `gate.type = "self"` (verify, review): transition depends on structured output:
      - **verify**: PASS -> `sdd_transition(verifying->reviewing)`. FAIL/SPEC_GAP -> step 9.
      - **review**: route by execution mode:
-       - **Express / Light / Standard**: invoke `/code-review:code-review` plugin.
+       - **Light / Standard**: invoke `/code-review:code-review` plugin. Express skips review (gate-check only).
        - **Full** (high/critical): invoke `/pr-review-toolkit:review-pr code errors tests` if installed (parallel: code-reviewer + silent-failure-hunter + pr-test-analyzer). If not installed, fall back to `/code-review:code-review`.
        - **Fallback**: if neither plugin is available, use haiku-validator.
        - Evaluate results: if issues with confidence >= 80: FAIL -> show findings before fix loop (`⚠️ Review: {N} findings ({severity breakdown})` + up to 3 one-line findings, rest as "+N more") -> `sdd_transition(reviewing->fix_review)` and enter review fix loop. If no high-confidence issues: PASS -> `sdd_transition(reviewing->pr_created)`.
-   - Emit metrics and phase confidence — see `references/observability.md` for schemas
+   - Emit metrics and phase confidence — see `docs/orchestrator/observability.md` for schemas
    - For plan phase: call `sdd_update_feature` to persist `plan_path`
    - For tasks phase: call `sdd_update_feature` to persist `tasks_path`, then register each task in `feature.tasks` (REQUIRED for `sdd_transition(decomposed->implementing)`)
 9. If gate failed: call `sdd_classify_failure` and route accordingly
@@ -344,12 +320,12 @@ If worktree creation fails: transition to `escalated`. If `--skip-worktree`: set
 
 | Mode | Trigger | Phases executed |
 |------|---------|----------------|
-| **Express** | `complexity = "trivial"` | triage -> implement -> verify-light -> pr |
+| **Express** | `complexity = "trivial"` | triage -> implement -> gate-check -> pr |
 | **Light** | `complexity = "low"` | triage -> specify -> implement -> verify -> pr |
 | **Standard** | `complexity = "medium"` | All 8 phases, no pair review |
 | **Full** | `complexity = "high"` or `"critical"` | All 8 phases (pair review if `--pair-review`) |
 
-Express: implementation-engine gets raw feature description. Single synthetic task. Haiku-validator verify. Review skipped.
+Express: implementation-engine gets raw feature description. Single synthetic task. After implementation, orchestrator runs `sdd_evaluate_gate` with `execution_mode: "express"` directly — NO verification-engine spawn. If gate passes, proceed to PR. Review skipped.
 Light: Spec generated normally. Plan/tasks skipped. Single synthetic task. Normal verify/review.
 Standard: All 8 phases. Default mode.
 Full: All 8 phases. Pair review only with `--pair-review` flag.
@@ -358,16 +334,18 @@ Full: All 8 phases. Pair review only with `--pair-review` flag.
 
 | # | Phase | Subagent | Model | State transition |
 |---|-------|----------|-------|-----------------|
-| 1 | Triage | `haiku-analyst` (triage mode) | haiku | — |
+| 1 | Triage | `haiku-triage` (triage mode) | haiku | — |
 | 2 | Specify | `spec-generator` | sonnet | `draft` -> `specified` |
 | 3 | Plan | `plan-architect` | sonnet | `specified` -> `planned` |
 | 4 | Tasks | `task-decomposer` | sonnet | `planned` -> `decomposed` |
 | 5 | Implement | `implementation-engine` (per task) | sonnet | `decomposed` -> `implementing` |
 | 6 | Verify | `verification-engine` | sonnet | `implementing` -> `verifying` -> `reviewing` |
-| 7 | Review | orchestrator-inline (Express/Light/Standard: `/code-review:code-review`; Full: `/pr-review-toolkit:review-pr code errors tests`) | sonnet | `reviewing` -> `pr_created` or `fix_review` |
+| 7 | Review | orchestrator-inline (Light/Standard: `/code-review:code-review`; Full: `/pr-review-toolkit:review-pr code errors tests`; Express: skipped) | sonnet | `reviewing` -> `pr_created` or `fix_review` |
 | 8 | PR | orchestrator-inline (`worktree-pr finish`) | — | `pr_created` |
 
 ## Implementation phase details
+
+**Memory optimization**: At the start of the implementation phase, read memory sections ONCE via `sdd_memory_read` (project_conventions + learned_patterns). Cache the result and pass it as inline context to ALL task spawns within this phase. Do NOT call `sdd_memory_read` per task — it's the same data.
 
 ### Worktree precondition — HARD GATE
 
@@ -382,11 +360,25 @@ Full: All 8 phases. Pair review only with `--pair-review` flag.
 3. LOG with `event_type="parallelization_analysis"` — this is mandatory
 4. Display strategy to user (follow the per-task progress format from the DX Output Protocol)
 
+**Step 0b — Task batching (MANDATORY for tasks marked batch_eligible)**
+
+After DAG analysis, group `batch_eligible` tasks into batches of up to 3 tasks each. Batching criteria:
+- Task is marked `batch_eligible: true` in tasks.md (set by task-decomposer for tasks affecting ≤ 2 files with straightforward logic)
+- Tasks in the same batch must NOT have dependencies on each other
+- Tasks in the same batch must NOT modify the same files (file ownership rule)
+- Maximum 3 tasks per batch
+
+For each batch, spawn ONE implementation-engine agent with ALL task blocks in the brief. The agent executes them sequentially within its context. After completion, call `sdd_update_task` for each task in the batch.
+
+Non-batch-eligible tasks (complex, multi-file, or interdependent) are spawned individually as before. If all batch_eligible tasks in a wave share file conflicts, treat them as non-batch-eligible and spawn individually.
+
+Example: if tasks.md has 7 tasks where 4 are batch_eligible with no conflicts, group into 2 batches of 2 → spawn 2 agents instead of 4. Combined with 3 individual tasks = 5 total spawns instead of 7.
+
 **Steps 1-3 — Task execution**
 
-1. Read task list from `specs/{feature_id}/tasks.md`
-2. Execute waves in order. For waves with 2+ tasks: invoke `/orchestrating-agent-teams` if available, otherwise spawn parallel agents via Claude Code's native `Agent` tool (one `implementation-engine` agent per task, all launched in a single message for concurrent execution). For single tasks: launch `implementation-engine` directly. For each task: extract block, launch agent with spec + plan + memory pointing at `worktree_path`. Include: `"You MUST read all files in task.files BEFORE writing any code."`
-3. After all tasks complete: `sdd_transition(implementing->verifying)`
+1. Read and parse `specs/{feature_id}/tasks.md` ONCE. Extract all task blocks (ID, title, description, files, dependencies) into a structured list. This is the single source of truth for the implementation phase — do NOT re-read the file per task.
+2. Execute waves in order. Within each wave: (a) group batch_eligible tasks into batches of up to 3 (respecting file ownership), (b) spawn one implementation-engine per batch, (c) spawn individual implementation-engine agents for non-batch-eligible tasks. For waves with 2+ agents: invoke `/orchestrating-agent-teams` if available, otherwise spawn parallel agents via Claude Code's native `Agent` tool (all launched in a single message for concurrent execution). For each task/batch: pass the extracted task block(s) as inline context in the agent brief (not the file path), along with spec + plan + memory pointing at `worktree_path`. Include: `"You MUST read all files in task.files BEFORE writing any code."` Agents do NOT re-read tasks.md — they receive their task definition directly.
+3. After all tasks complete: `sdd_transition(implementing->verifying)`. **Express mode exception**: after the single task completes, call `sdd_evaluate_gate` with `execution_mode: "express"` inline instead of spawning verification-engine. If gate passes, proceed directly to PR phase (saves one full agent spawn).
 
 ## Error handling
 
@@ -399,9 +391,7 @@ Full: All 8 phases. Pair review only with `--pair-review` flag.
 
 ## Escalation protocol
 
-1. Write escalation report to `.sdd/escalation/{feature}/{timestamp}.md`
-2. Include: current state, last agent, error code, diagnosis, suggested human action
-3. Transition to `escalated`. Halt all agents. Report to user.
+For escalation procedures, read `docs/orchestrator/error-recovery.md` § Escalation protocol.
 
 ## PR phase details
 
@@ -428,26 +418,7 @@ After PR creation, verify merge via `gh api`. If merged: transition + cleanup. I
 
 ## Post-pipeline iterations
 
-After the pipeline, user may request changes. Track each iteration:
-1. LOG `event_type="post_pipeline_iteration"` with user request summary
-2. Launch `implementation-engine` pointing at worktree/project
-3. LOG `event_type="post_pipeline_iteration_done"` with files changed
-
-## Example
-
-User: `/sdd-auto:run health-check "Add a health check endpoint that returns server status and uptime"`
-
-This will:
-1. Echo: `◈ Feature: health-check` / `◈ Brief: Add a health check endpoint...`
-2. Triage: estimate complexity and risk
-3. Generate a spec at `specs/health-check/spec.md`
-4. Generate a plan at `specs/health-check/plan.md` + ADR
-5. Decompose into tasks at `specs/health-check/tasks.md`
-6. Implement all tasks (per-task; pair review only if `--pair-review` flag)
-7. Run verification (tests, spec coverage, regression, constitution)
-8. Run code review via /code-review:code-review plugin (correctness, security, performance, maintainability, side effects)
-9. Create a PR with structured metadata
-10. Run retrospective and update memory
+For post-pipeline iteration tracking, see `docs/orchestrator/post-pipeline.md` § Post-pipeline iterations.
 
 $ARGUMENTS
 

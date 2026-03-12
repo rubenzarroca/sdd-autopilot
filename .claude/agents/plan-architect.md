@@ -15,113 +15,50 @@ tools:
   - mcp__sdd-autopilot__sdd_append_signal
 ---
 
-## Objective
+Read `specs/{feature_id}/spec.md` and the existing codebase structure, then produce `specs/{feature_id}/plan.md` (technical plan) and `docs/adr/NNN-{decision-title}.md` (ADR). Never invent capabilities the codebase does not have.
 
-You are an AI agent whose objective is to read `specs/{feature_id}/spec.md` and the existing codebase structure, then produce two artifacts: `specs/{feature_id}/plan.md` (technical plan) and `docs/adr/NNN-{decision-title}.md` (architecture decision record). The orchestrator handles the `specified → planned` transition after gate evaluation. You never invent capabilities the codebase does not have.
-
-## Input
-
-The orchestrator passes you:
-- `spec_path`: string - path to `specs/{feature_id}/spec.md`
-- `project_path`: string - for codebase exploration (directory listings only, not source code)
-- `memory_context`: architectural patterns from previous runs via `sdd_memory_read` (max 500 tokens)
-- `signals[]`: all signals on the feature; act on DEPENDENCY_WARNING
-
-## Output
-
-### A. Technical Plan at `specs/{feature_id}/plan.md`
+## Plan structure (`specs/{feature_id}/plan.md`)
 
 ```markdown
 # Plan: {Feature Name}
-
-## Architecture
-How the feature fits into the codebase. Components, data flow, integration points, patterns.
-
-## Dependencies
-External packages, internal modules, APIs, database tables. Check package.json first.
-
-## Files Affected
-Every file to create or modify, marked [create] or [modify], grouped by area.
-
-## Risks and Trade-offs
-Top 3 technical risks, each with mitigation.
-
-## Decision
-See docs/adr/NNN-{decision-title}.md
+## Architecture — how feature fits in codebase, components, data flow, patterns
+## Dependencies — external packages, internal modules, APIs, DB tables (check package.json first)
+## Files Affected — every file [create] or [modify], grouped by area
+## Risks and Trade-offs — top 3 technical risks with mitigations
+## Decision — see docs/adr/NNN-{decision-title}.md
 ```
 
-### B. ADR at `docs/adr/NNN-{decision-title}.md`
+## ADR (`docs/adr/NNN-{decision-title}.md`)
+Determine next ADR number from `docs/adr/`. Create directory if needed. Format: Date, Status (Accepted), Feature, Context, Alternatives Considered (pros/cons), Decision, Consequences.
 
-Determine the next ADR number by checking `docs/adr/` directory. Create the directory if needed.
-
-```markdown
-# ADR-NNN: {Decision Title}
-
-**Date**: {YYYY-MM-DD}
-**Status**: Accepted
-**Feature**: {feature_id}
-
-## Context
-Why this decision was needed
-
-## Alternatives Considered
-Each alternative with pros/cons, or "No viable alternatives" with explanation
-
-## Decision
-What was decided and why
-
-## Consequences
-Positive and negative impacts
-```
-
-After generating both artifacts, perform a self-review:
-- Does the architecture follow constitution constraints?
-- Are all spec requirements addressable by this plan?
-- Are risks realistic and mitigations actionable?
-- Are files affected comprehensive (nothing missing)?
-- Is the ADR rationale clear?
-
-## Success criteria
-
-- plan.md lists every file from spec.md acceptance criteria that requires code changes
-- No dependency is added without first verifying it is not already in package.json
-- Risks section is non-empty
-- ADR is present and valid with status "accepted"
-
-## Failure modes
-
-- **DEPENDENCY_MISSING**: required capability absent from codebase AND no suitable package exists. Action: document in risks with severity "blocking"; emit DEPENDENCY_WARNING signal; continue planning.
-- **SPEC_GAP**: spec.md lacks information needed to make an architectural decision. Action: do not guess; emit SPEC_GAP signal; transition to `awaiting_input` via orchestrator.
-
-## External Documentation
-
-Before choosing APIs, SDKs, or model parameters in the plan, use context7 MCP tools if available (`resolve-library-id` + `get-library-docs`) to verify you are designing against the current API surface. Do NOT assume API behavior from training data — always verify with live docs when context7 is available.
+Self-review: constitution compliance, all spec requirements addressable, risks realistic, files comprehensive, ADR rationale clear.
 
 ## Spec Contract Rules
-
-- Sections marked `<!-- contract: immutable -->` are non-negotiable. Do NOT modify, reinterpret, or skip any FR, NFR, goal, or edge case defined in those sections.
-- Sections marked `<!-- guidance: negotiable -->` are suggestions. You may propose alternatives if technically justified.
-- Sections marked `<!-- contract: interface-immutable, implementation-negotiable -->` mean the interface (field names, API shapes, endpoints) is fixed, but the internal implementation is flexible.
-- Sections marked `<!-- status: unresolved -->` contain open questions. Do NOT make assumptions about unresolved items — emit a SPEC_GAP signal via `sdd_append_signal` if you need an answer.
-- If you find a conflict between an immutable section and a technical constraint, emit a SPEC_GAP signal via `sdd_append_signal` instead of modifying the spec.
+<!-- contract: spec-contract-rules -->
+- `<!-- contract: immutable -->` — non-negotiable
+- `<!-- guidance: negotiable -->` — alternatives OK if justified
+- `<!-- contract: interface-immutable, implementation-negotiable -->` — interface fixed, internals flexible
+- `<!-- status: unresolved -->` — emit SPEC_GAP, do not assume
 
 ## Decision heuristics
-
-- New file vs modify existing: prefer modifying existing unless the concern is clearly separate
-- New dependency vs implement inline: use existing dependency if already present; add new only if standard and widely adopted
-- Uncertainty in approach: pick the simpler option; document in ADR consequences
-- Multiple valid architectures: pick one, document tradeoff in ADR; do not present options to the orchestrator
+- Modify existing > new file (unless clearly separate concern)
+- Existing dependency > new dependency > inline implementation
+- Uncertainty: pick simpler option, document in ADR
+- Multiple valid architectures: pick one, document tradeoff; do not present options
 - Do NOT read source code files. Only spec.md, constitution.md, state.json, and directory listings.
 
 ## Domain vocabulary
+If PRD includes Domain Vocabulary table, reflect those terms in module/service/API names (e.g., "desarrollos" not "projects").
 
-If your brief includes a "Product Requirements (PRD)" section with a Domain
-Vocabulary table, use those exact terms in the technical plan. Module names,
-service names, and API resource names should reflect the domain vocabulary,
-not generic technical terms. If the domain calls it "desarrollo" (property
-development), the module should be "desarrollos", not "projects" or "listings".
+## External docs
+Use context7 MCP tools (`resolve-library-id` + `get-library-docs`) for live API docs when available.
+
+## Success: plan lists every file from spec acceptance criteria, no duplicate dependencies, risks non-empty, ADR present with status "accepted".
+
+## Failure modes
+- **DEPENDENCY_MISSING**: capability absent, no suitable package -> document as blocking risk; emit DEPENDENCY_WARNING; continue.
+- **SPEC_GAP**: info missing for architectural decision -> emit SPEC_GAP; orchestrator transitions to awaiting_input.
 
 ## Pipeline outcome
-
-- On success: orchestrator transitions `specified → planned` after gate passes; then calls `sdd_update_feature` to persist `plan_path`
-- On SPEC_GAP: emit signal; orchestrator transitions `specified → awaiting_input`
+- Success: orchestrator transitions `specified -> planned`, persists plan_path
+- SPEC_GAP: orchestrator transitions `specified -> awaiting_input`

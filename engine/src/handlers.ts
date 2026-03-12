@@ -115,6 +115,7 @@ export async function handleTransition(params: {
     return {
       success: true,
       new_state: result.to,
+      feature: await sm.getFeature(params.feature_id),
     };
   }
 
@@ -155,6 +156,7 @@ export async function handleEvaluateGate(params: {
   project_path: string;
   feature_id: string;
   artifacts: Record<string, string>;
+  execution_mode?: string;
 }): Promise<unknown> {
   const contract = contracts.contracts[params.phase_id];
   if (!contract) {
@@ -170,6 +172,11 @@ export async function handleEvaluateGate(params: {
 
     // Mechanical check: file exists (e.g. "spec.md created", "plan.md created")
     if (lc.includes("created")) {
+      // Skip complexity-gated checks for lower execution modes
+      if (lc.includes("required for complexity") && (params.execution_mode === "express" || params.execution_mode === "light")) {
+        checks.push({ name: checkDesc, passed: true, detail: "Skipped: not required for this execution mode" });
+        continue;
+      }
       const fileMatch = checkDesc.match(/([\w.-]+\.(?:md|json|txt))/i);
       if (fileMatch) {
         const fileName = fileMatch[1];
@@ -300,6 +307,11 @@ export async function handleEvaluateGate(params: {
     needsSemantic = { check: checkDesc, description: `Cannot mechanically validate: "${checkDesc}"` };
   }
 
+  if ((params.execution_mode === "express" || params.execution_mode === "light") && needsSemantic) {
+    checks.push({ name: needsSemantic.check, passed: true, detail: `Auto-passed: ${params.execution_mode} mode skips semantic validation` });
+    needsSemantic = undefined;
+  }
+
   const allPassed = checks.every(c => c.passed) && !needsSemantic;
 
   const result: Record<string, unknown> = {
@@ -312,6 +324,33 @@ export async function handleEvaluateGate(params: {
   return result;
 }
 
+// Pre-compiled regex patterns for failure classification
+const IMPL_BUG_PATTERNS: RegExp[] = [
+  /stack trace/i, /traceback/i, /at .+:\d+:\d+/,
+  /typeerror/i, /referenceerror/i, /syntaxerror/i, /type error/i,
+  /test fail/i, /tests? failed/i, /assertion/i, /expect.*to/i,
+  /cannot read prop/i, /is not a function/i, /is not defined/i,
+  /null pointer/i, /segfault/i, /undefined is not/i,
+  /fail/i, /error.*line \d+/i,
+];
+
+const SPEC_GAP_PATTERNS: RegExp[] = [
+  /not found/i, /undefined behavior/i, /missing requirement/i,
+  /spec.*gap/i, /not specified/i, /not defined in spec/i,
+  /ambiguous/i, /unclear/i, /missing.*spec/i,
+  /no such.*endpoint/i, /not documented/i,
+];
+
+const INFRA_PATTERNS: RegExp[] = [
+  /econnrefused/i, /econnreset/i, /etimedout/i, /connection.*refused/i,
+  /permission denied/i, /eacces/i, /eperm/i,
+  /build fail/i, /compilation.*fail/i, /cannot find module/i,
+  /npm err/i, /yarn error/i, /docker.*error/i,
+  /disk.*full/i, /no space/i, /out of memory/i,
+  /network/i, /dns/i, /certificate/i, /ssl/i,
+  /timeout/i, /timed out/i,
+];
+
 // ─── 5. sdd_classify_failure ──────────────────────────────────────
 
 export async function handleClassifyFailure(params: {
@@ -322,42 +361,13 @@ export async function handleClassifyFailure(params: {
 }): Promise<unknown> {
   const msg = (params.error_message + " " + (params.test_output ?? "")).toLowerCase();
 
-  // Implementation bug indicators
-  const implBugPatterns = [
-    /stack trace/i, /traceback/i, /at .+:\d+:\d+/,
-    /typeerror/i, /referenceerror/i, /syntaxerror/i, /type error/i,
-    /test fail/i, /tests? failed/i, /assertion/i, /expect.*to/i,
-    /cannot read prop/i, /is not a function/i, /is not defined/i,
-    /null pointer/i, /segfault/i, /undefined is not/i,
-    /fail/i, /error.*line \d+/i,
-  ];
-
-  // Spec gap indicators
-  const specGapPatterns = [
-    /not found/i, /undefined behavior/i, /missing requirement/i,
-    /spec.*gap/i, /not specified/i, /not defined in spec/i,
-    /ambiguous/i, /unclear/i, /missing.*spec/i,
-    /no such.*endpoint/i, /not documented/i,
-  ];
-
-  // Infra issue indicators
-  const infraPatterns = [
-    /econnrefused/i, /econnreset/i, /etimedout/i, /connection.*refused/i,
-    /permission denied/i, /eacces/i, /eperm/i,
-    /build fail/i, /compilation.*fail/i, /cannot find module/i,
-    /npm err/i, /yarn error/i, /docker.*error/i,
-    /disk.*full/i, /no space/i, /out of memory/i,
-    /network/i, /dns/i, /certificate/i, /ssl/i,
-    /timeout/i, /timed out/i,
-  ];
-
   let implScore = 0;
   let specScore = 0;
   let infraScore = 0;
 
-  for (const p of implBugPatterns) if (p.test(msg)) implScore++;
-  for (const p of specGapPatterns) if (p.test(msg)) specScore++;
-  for (const p of infraPatterns) if (p.test(msg)) infraScore++;
+  for (const p of IMPL_BUG_PATTERNS) if (p.test(msg)) implScore++;
+  for (const p of SPEC_GAP_PATTERNS) if (p.test(msg)) specScore++;
+  for (const p of INFRA_PATTERNS) if (p.test(msg)) infraScore++;
 
   let category: "implementation_bug" | "spec_gap" | "infra_issue";
   let confidence: "high" | "medium" | "low";

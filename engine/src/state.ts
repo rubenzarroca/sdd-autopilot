@@ -86,9 +86,15 @@ const TERMINAL_STATES = new Set<FeatureState>(["merged", "escalated"]);
 
 export class StateManager {
   private statePath: string;
+  private static cache = new Map<string, StateJson>();
 
   constructor(projectRoot: string) {
     this.statePath = join(projectRoot, ".sdd", "state.json");
+  }
+
+  /** Clear the in-memory cache (for testing). */
+  static clearCache(): void {
+    StateManager.cache.clear();
   }
 
   async exists(): Promise<boolean> {
@@ -101,13 +107,20 @@ export class StateManager {
   }
 
   async read(): Promise<StateJson> {
+    const cached = StateManager.cache.get(this.statePath);
+    if (cached) {
+      return structuredClone(cached);
+    }
     const raw = await readFile(this.statePath, "utf-8");
-    return JSON.parse(raw) as StateJson;
+    const state = JSON.parse(raw) as StateJson;
+    StateManager.cache.set(this.statePath, structuredClone(state));
+    return state;
   }
 
   async write(state: StateJson): Promise<void> {
     await mkdir(dirname(this.statePath), { recursive: true });
     await atomicWriteJSON(this.statePath, state);
+    StateManager.cache.set(this.statePath, structuredClone(state));
   }
 
   async init(projectName: string): Promise<StateJson> {

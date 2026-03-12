@@ -160,3 +160,10 @@ Collect items requiring human attention from 7 sources:
 Show only sections with items. If no items: `"HUMAN DEBRIEF: No action items. All clear."`
 
 The debrief is the LAST thing shown. It does not block the pipeline.
+
+## Post-pipeline iterations
+
+After the pipeline, user may request changes. Track each iteration:
+1. LOG `event_type="post_pipeline_iteration"` with user request summary
+2. Launch `implementation-engine` pointing at worktree/project
+3. LOG `event_type="post_pipeline_iteration_done"` with files changed
