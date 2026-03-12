@@ -107,9 +107,18 @@ Write remaining learnings to memory via MEM_WRITE. Note: critical data was alrea
 
 After step 9, proceed to Adaptive Run Close.
 
-## Step 10 — Worktree cleanup
+## Step 10 — Branch deletion + Worktree cleanup
 
-After Adaptive Run Close, if worktree was created and `skip_worktree` is not set:
+**Branch deletion** (on merge only):
+Delete the feature branch from both remote and local to prevent branch accumulation:
+```bash
+git push origin --delete {branch_name}
+git branch -D {branch_name}
+```
+If the current checkout is on the feature branch, switch to the base branch first (`git checkout main`).
+If deletion fails (already deleted, permissions), log a warning but do not block the pipeline.
+
+**Worktree cleanup** — after branch deletion, if worktree was created and `skip_worktree` is not set:
 - **If `merged`**: invoke `/worktree-pr cleanup`.
 - **If `escalated`**: invoke `/worktree-pr cleanup`.
 - **If `pr_created`** (not yet merged): skip cleanup, report worktree path.

@@ -137,12 +137,11 @@ PR: {pr_url}
 
 **On user-reported merge ("PR merged", "ya se mergeó", etc.):**
 1. `sdd_transition(pr_created->merged)`
-2. Run post-pipeline steps 1-9 from `docs/orchestrator/post-pipeline.md` (summary, score, thresholds, anomaly, golden, retro, patterns, consolidation)
+2. **ALWAYS** run post-pipeline steps 1-9 from `docs/orchestrator/post-pipeline.md` (summary, score, thresholds, anomaly, golden, retro, patterns, consolidation) — even if post-pipeline ran at PR creation time. The merge is the canonical close event; metrics and retro must reflect the final merged state.
 3. Show the full completion report table
-4. Run worktree cleanup (step 10)
-5. Show Human Debrief if any items
-
-If post-pipeline already ran at PR creation time, skip steps 1-2 and only run: transition, cleanup, and show a brief merge confirmation with the score and any retro learnings.
+4. Delete the feature branch (remote + local): `git push origin --delete {branch}` then `git branch -D {branch}`
+5. Run worktree cleanup (step 10)
+6. Show Human Debrief if any items
 
 **On fatal error:**
 ❌ Pipeline stopped at [{phase}] — {what happened}
@@ -210,7 +209,7 @@ For error translation patterns (how to show MCP errors to developers), read `doc
 
 4. **Auto-recover incomplete runs**: Check for features in non-terminal states. Recover missing artifacts, emit missing metrics, show observability report. Also run memory recovery check (safety net for lost writes due to context compaction).
 
-5. **Check pending merges**: For features with state `pr_created` and `pr_number` set, check via `gh api` if merged. If merged: transition to `merged`, run post-pipeline steps if not already completed (see "On user-reported merge" in DX Output Protocol), then invoke `/worktree-pr cleanup`.
+5. **Check pending merges**: For features with state `pr_created` and `pr_number` set, check via `gh api` if merged. If merged: follow the full "On user-reported merge" flow (transition, post-pipeline steps 1-9, branch deletion, worktree cleanup).
 
 6. **Create the feature entry** in state.json (direct write — no `sdd_create_feature` tool exists):
    ```json
@@ -401,7 +400,7 @@ Phase 8 is executed inline by the orchestrator:
 2. If `--skip-worktree`: `git add -A`, commit, push, `gh pr create`. Extract and persist PR metadata.
 3. If `--skip-pr`: commit only.
 
-After PR creation, verify merge via `gh api`. If merged: transition + cleanup. If not: report and proceed to post-pipeline.
+After PR creation, verify merge via `gh api`. If merged: follow the full "On user-reported merge" flow (transition, post-pipeline steps 1-9, branch deletion, worktree cleanup). If not: report and proceed to post-pipeline.
 
 ## Observability, signals, post-pipeline, and adaptive orchestration
 
