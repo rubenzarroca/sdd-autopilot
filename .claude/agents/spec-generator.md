@@ -73,3 +73,17 @@ Input max 1500t (feature 500t + conventions 500t + patterns 500t). Output max 20
 ## Pipeline outcome
 - Success: orchestrator transitions `draft -> specified`
 - NEEDS_CLARIFICATION: emit questions via `sdd_append_signal`; orchestrator transitions `draft -> awaiting_input`
+
+## Telemetry (mandatory)
+
+Your FINAL line of output — after all spec content and signals — MUST be:
+
+```
+[TELEMETRY] tool_calls={N} estimated_output_tokens={K}
+```
+
+Where:
+- `N` = total number of tool calls you made (count every Read, Write, Edit, Grep, Glob, Bash, MCP call, etc.)
+- `K` = estimated total output tokens you generated. Heuristic: count approximate words in all your text responses (not tool calls) and multiply by 1.3.
+
+This line is OBLIGATORY. Do not omit it. It must be the very last line of your final response.

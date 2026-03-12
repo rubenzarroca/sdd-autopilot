@@ -70,37 +70,98 @@ Before any escalation transition or awaiting_input pause:
 LOG(event_type="escalation", data={ reason: "{human-readable reason}", failure_mode: "{SPEC_GAP|TASK_BLOCKED|...}", action: "escalated" | "awaiting_input" })
 ```
 
-### 8. Metrics emission (after each phase)
+### 8. Metrics emission — Token Instrumentation Protocol
 
 Call METRICS immediately after each phase completes (gate passed or failed definitively).
 
-**Instrumentation pattern:**
+#### Step 1 — Extract the `<usage>` block
 
-When the Agent tool returns, its completion summary includes token count and tool uses (e.g. `Done (17 tool uses · 23.2k tokens · 2m 7s)`). Parse these values from the Agent result to populate `tokens_total` and `tool_calls_count`.
+When the Agent tool returns, its completion includes a `<usage>` block:
+
+```
+<usage>total_tokens: {N}
+tool_uses: {M}
+duration_ms: {D}</usage>
+```
+
+Extract these three integers: `total_tokens`, `tool_uses`, `duration_ms`.
+
+#### Step 2 — Look for the `[TELEMETRY]` tag from the subagent
+
+The subagent includes a final line with format:
+```
+[TELEMETRY] tool_calls={N} estimated_output_tokens={K}
+```
+If this line exists, use `estimated_output_tokens` as `tokens_out`.
+If NOT found, fall through to Step 3.
+
+#### Step 3 — Calculate tokens_in and tokens_out via ratio table
+
+Use these ratios per phase (based on each agent's activity profile):
+
+| Phase     | Agent                 | input_ratio | output_ratio |
+|-----------|-----------------------|-------------|--------------|
+| triage    | haiku-triage          | 0.90        | 0.10         |
+| specify   | spec-generator        | 0.70        | 0.30         |
+| plan      | plan-architect        | 0.75        | 0.25         |
+| tasks     | task-decomposer       | 0.80        | 0.20         |
+| implement | implementation-engine | 0.60        | 0.40         |
+| verify    | verification-engine   | 0.85        | 0.15         |
+| review    | code-reviewer         | 0.80        | 0.20         |
+
+Calculation:
+```
+tokens_in  = round(total_tokens × input_ratio)
+tokens_out = round(total_tokens × output_ratio)
+```
+
+Validation: `tokens_in + tokens_out` MUST equal `total_tokens` (±1 for rounding).
+If not, adjust: `tokens_in = total_tokens - tokens_out`.
+
+If Step 2 found `estimated_output_tokens`, use it as `tokens_out` and compute:
+`tokens_in = total_tokens - tokens_out`.
+
+#### Step 4 — Call sdd_emit_metrics with complete data
+
+NEVER call sdd_emit_metrics with `tokens_in: null` or `tokens_out: null`.
+
+If the `<usage>` block is missing (e.g., phase was a skip or error):
+- Call LOG with `type="warning"`, `message="Token instrumentation failed for phase {phase}: usage block not found"`
+- ONLY in that case, pass `tokens_in: null`, `tokens_out: null`
 
 ```
 started_at  = new Date().toISOString()  // capture before Agent call
 t0          = Date.now()                // capture before Agent call
 // ... invoke subagent via Agent tool ...
-// Parse from Agent result: "{N} tool uses · {N}k tokens · {duration}"
+// Parse <usage> block and [TELEMETRY] tag from Agent result
 completed_at = new Date().toISOString() // capture after Agent returns
 duration_ms  = Date.now() - t0
 
 METRICS(metrics={
   run_id, feature_id, phase, agent, model,
   started_at, completed_at, duration_ms,
-  tokens_total: N,         // parsed from Agent result (e.g. 23200 from "23.2k tokens")
-  tool_calls_count: N,     // parsed from Agent result (e.g. 17 from "17 tool uses")
+  tokens_in: N,            // from Step 2 or Step 3
+  tokens_out: N,           // from Step 2 or Step 3
+  tool_calls_count: N,     // from <usage> tool_uses or [TELEMETRY] tool_calls
   gate_result: "pass"|"fail"|"skip",
-  gate_attempts: N,        // 1 if first attempt, 2+ if fix loop
-  findings_count: N,       // from verify/review structured output; 0 for other phases
-  findings_severity: [],   // ["critical", "major", "minor"] from verify/review; [] for other phases
-  fix_loop_count: N,       // 0 if passed on first try
+  gate_attempts: N,
+  findings_count: N,
+  findings_severity: [],
+  fix_loop_count: N,
   delta_direction: null|"improving"|"regressing"|"stable",
   feature_type: "{type}"|null,
   complexity: "{level}"|null,
 })
 ```
+
+#### Step 5 — Post-run validation
+
+After the full pipeline completes, BEFORE the retro:
+
+1. Read `metrics.jsonl` for the current run
+2. Count phases with `tokens_in: null` → must be 0
+3. Count phases with `tool_calls_count: 0` when the agent clearly used tools → must be 0
+4. If any validation fails: LOG `type="error"`, `message="Token instrumentation incomplete: {N} phases missing token data"`
 
 ## Verbose phase summary
 

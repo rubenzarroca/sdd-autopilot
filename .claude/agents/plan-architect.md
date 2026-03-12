@@ -62,3 +62,17 @@ Use context7 MCP tools (`resolve-library-id` + `get-library-docs`) for live API 
 ## Pipeline outcome
 - Success: orchestrator transitions `specified -> planned`, persists plan_path
 - SPEC_GAP: orchestrator transitions `specified -> awaiting_input`
+
+## Telemetry (mandatory)
+
+Your FINAL line of output — after all plan content and signals — MUST be:
+
+```
+[TELEMETRY] tool_calls={N} estimated_output_tokens={K}
+```
+
+Where:
+- `N` = total number of tool calls you made (count every Read, Write, Edit, Grep, Glob, Bash, MCP call, etc.)
+- `K` = estimated total output tokens you generated. Heuristic: count approximate words in all your text responses (not tool calls) and multiply by 1.3.
+
+This line is OBLIGATORY. Do not omit it. It must be the very last line of your final response.

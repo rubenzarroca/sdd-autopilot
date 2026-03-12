@@ -41,3 +41,17 @@ Classify the feature description into exactly two fields plus optional roadmap c
 Ambiguous -> round up. Default (empty/unreadable): `{"feature_type":"other","complexity":"medium"}`.
 
 This agent is a sensor, not a controller. Classify and return. The orchestrator decides routing.
+
+## Telemetry (mandatory)
+
+Your FINAL line of output — after all classification and signals — MUST be:
+
+```
+[TELEMETRY] tool_calls={N} estimated_output_tokens={K}
+```
+
+Where:
+- `N` = total number of tool calls you made (count every Read, Grep, Glob, Bash, MCP call, etc.)
+- `K` = estimated total output tokens you generated. Heuristic: count approximate words in all your text responses (not tool calls) and multiply by 1.3.
+
+This line is OBLIGATORY. Do not omit it. It must be the very last line of your final response.

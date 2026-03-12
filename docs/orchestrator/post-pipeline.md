@@ -122,18 +122,18 @@ After Adaptive Run Close, if worktree was created and `skip_worktree` is not set
  SDD PIPELINE REPORT -- {feature_id}
 ===================================================
 
- Phase       | Duration | Tokens | Tools | Gate | Fix | Conf
--------------|----------|--------|-------|------|-----|------
- Triage      | {dur}    | {tok}  | {N}   | pass | 0   | --
- Specify     | {dur}    | {tok}  | {N}   | pass | {N} | {conf}
- Plan        | {dur}    | {tok}  | {N}   | pass | {N} | {conf}
- Tasks       | {dur}    | {tok}  | {N}   | pass | {N} | {conf}
- Implement   | {dur}    | {tok}  | {N}   | pass | {N} | {conf}
- Verify      | {dur}    | {tok}  | {N}   | pass | {N} | {conf}
- Review      | {dur}    | {tok}  | {N}   | pass | {N} | {conf}
- PR          | {dur}    | {tok}  | {N}   | pass | 0   | --
--------------|----------|--------|-------|------|-----|------
- TOTAL       | {total}  | {tot}  | {N}   |      | {N} | {avg}
+ Phase       | Duration | Tokens In | Tokens Out | Total    | Tools | Gate | Fix | Conf
+-------------|----------|-----------|------------|----------|-------|------|-----|------
+ Triage      | {dur}    | {in}      | {out}      | {total}  | {N}   | pass | 0   | --
+ Specify     | {dur}    | {in}      | {out}      | {total}  | {N}   | pass | {N} | {conf}
+ Plan        | {dur}    | {in}      | {out}      | {total}  | {N}   | pass | {N} | {conf}
+ Tasks       | {dur}    | {in}      | {out}      | {total}  | {N}   | pass | {N} | {conf}
+ Implement   | {dur}    | {in}      | {out}      | {total}  | {N}   | pass | {N} | {conf}
+ Verify      | {dur}    | {in}      | {out}      | {total}  | {N}   | pass | {N} | {conf}
+ Review      | {dur}    | {in}      | {out}      | {total}  | {N}   | pass | {N} | {conf}
+ PR          | {dur}    | {in}      | {out}      | {total}  | {N}   | pass | 0   | --
+-------------|----------|-----------|------------|----------|-------|------|-----|------
+ TOTAL       | {total}  | {sum_in}  | {sum_out}  | {sum}    | {N}   |      | {N} | {avg}
 
  Score: {pipeline_score}/100 | First-pass: {first_pass_rate}%
  Golden: {golden_score} (weighted avg, {N} runs) | Delta: {delta} | Trend: {trend}
@@ -143,6 +143,16 @@ After Adaptive Run Close, if worktree was created and `skip_worktree` is not set
 ```
 
 Build from `metrics.jsonl` and `phase_confidence.json` in `.sdd/runs/{feature_id}/`.
+
+### Cost reference (for post-processing)
+
+| Model             | Input ($/1M tokens) | Output ($/1M tokens) |
+|-------------------|---------------------|----------------------|
+| claude-haiku-4-5  | $0.80               | $4.00                |
+| claude-sonnet-4-6 | $3.00               | $15.00               |
+| claude-opus-4-6   | $15.00              | $75.00               |
+
+The orchestrator does NOT compute costs inline — only records tokens. Users process cost data from metrics.jsonl + this table.
 
 **Golden line**: populate from `golden_comparison` in `sdd_compute_score`. If `status: "insufficient_data"`, replace with: `Golden: not enough data ({runs}/{window} runs)`
 
