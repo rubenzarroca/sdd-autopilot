@@ -4,7 +4,7 @@ Runs once after triage, before specify. Modifies pipeline based on learned patte
 
 ## ADAPTIVE RUN START
 
-Call `sdd_get_strategy(project_path, feature_type, complexity)`. Store `applicable_patterns`, `active_experiments`, `exploration_decision` for the run.
+Call `sdd_get_strategy(project_path, feature_type, complexity)`. Use default verbosity (`"full"`) — the orchestrator needs `applicable_patterns`, `active_experiments`, `exploration_decision` for the full run.
 
 **If `has_adaptations` is false -> skip straight to specify.** Nothing to adapt.
 

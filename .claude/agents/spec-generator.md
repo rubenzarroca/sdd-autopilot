@@ -17,6 +17,8 @@ tools:
 
 Transform a feature description into `specs/{feature_id}/spec.md` where every requirement is verifiable via automated test. The orchestrator handles state transition after gate evaluation.
 
+**Token optimization**: When calling `sdd_get_state` or `sdd_memory_read`, pass `verbosity: "minimal"` to reduce response size. You only need state/tasks summary, not full transitions and signals.
+
 ## Product context
 If brief includes "Product Requirements (PRD)", use it as primary context. Ensure spec is consistent with product vision, domain vocabulary, and system boundaries.
 

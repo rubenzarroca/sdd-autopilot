@@ -2,7 +2,11 @@
 
 # MCP Tools Reference
 
-SDD Autopilot exposes 36 MCP tools organized into four categories. All tools are deterministic Node.js handlers — no LLM calls.
+SDD Autopilot exposes 37 MCP tools organized into four categories. All tools are deterministic Node.js handlers — no LLM calls.
+
+### Verbosity parameter
+
+10 read tools accept an optional `verbosity` parameter (`"minimal"` | `"standard"` | `"full"`, default: `"full"`). Use `"minimal"` or `"standard"` to reduce token usage in multi-agent pipelines. Affected tools: `sdd_get_state`, `sdd_get_contract`, `sdd_evaluate_gate`, `sdd_memory_read`, `sdd_get_run_summary`, `sdd_get_analytics`, `sdd_compute_score`, `sdd_get_patterns`, `sdd_get_strategy`, `sdd_phase_confidence`.
 
 ## Core Pipeline (13 tools)
 
@@ -51,7 +55,7 @@ SDD Autopilot exposes 36 MCP tools organized into four categories. All tools are
 | `sdd_run_retro` | Generate structured retro report for a completed run |
 | `sdd_phase_confidence` | Assign confidence score to phase output |
 
-## Infrastructure (4 tools)
+## Infrastructure (5 tools)
 
 | Tool | Purpose |
 |------|---------|
@@ -59,3 +63,4 @@ SDD Autopilot exposes 36 MCP tools organized into four categories. All tools are
 | `sdd_propose_tool` | Propose a new MCP tool (self-evolution: agent detects a missing capability) |
 | `sdd_review_tool_proposal` | Review a tool proposal for overlap, coherence, and necessity |
 | `sdd_generate_tool_prompt` | Generate implementation prompt for a validated tool proposal |
+| `sdd_refresh_state` | Invalidate in-memory state cache (force next read to reload from disk). Use when external agents modify `state.json` directly. Scope: `"all"` or `"state"`. |

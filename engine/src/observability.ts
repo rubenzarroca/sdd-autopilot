@@ -12,6 +12,13 @@ const __dirname = dirname(__filename);
 import type { PhaseMetrics, RunSummary } from "./types.js";
 import { fileExists, parseJsonl, atomicWriteJSON, atomicAppendJSONL } from "./utils.js";
 
+// ─── Verbosity types ────────────────────────────────────────────
+type Verbosity = "minimal" | "standard" | "full";
+function resolveVerbosity(v?: string): Verbosity {
+  if (v === "minimal" || v === "standard" || v === "full") return v;
+  return "full";
+}
+
 // Fix loop caps from contracts.json — used by inline threshold checks in run_summary
 const FIX_LOOP_CAPS: Record<string, number> = (() => {
   try {
@@ -202,7 +209,10 @@ export async function handleGetRunSummary(params: {
   feature_id: string;
   run_id?: string;
   last_n_runs?: number;
+  verbosity?: string;
 }): Promise<unknown> {
+  const v = resolveVerbosity(params.verbosity);
+
   // last_n_runs: return N most recent historical summaries (no fresh computation)
   if (params.last_n_runs !== undefined) {
     const historyPath = resolve(params.project_path, ".sdd", "analytics", "history.jsonl");
@@ -212,6 +222,22 @@ export async function handleGetRunSummary(params: {
     const raw = await readFile(historyPath, "utf-8");
     const all = parseJsonl<RunSummary>(raw).filter(s => s.feature_id === params.feature_id);
     const last = all.slice(-params.last_n_runs);
+    if (v === "minimal") {
+      return {
+        runs_analyzed: last.length,
+        summaries: last.map(s => ({ run_id: s.run_id, outcome: s.outcome, pipeline_score: s.pipeline_score })),
+      };
+    }
+    if (v === "standard") {
+      return {
+        runs_analyzed: last.length,
+        summaries: last.map(s => ({
+          run_id: s.run_id, outcome: s.outcome, pipeline_score: s.pipeline_score,
+          total_duration_ms: s.total_duration_ms, total_fix_loops: s.total_fix_loops,
+          first_pass_rate: s.first_pass_rate, phases_executed: s.phases_executed,
+        })),
+      };
+    }
     return { summaries: last, runs_analyzed: last.length };
   }
 
@@ -313,6 +339,37 @@ export async function handleGetRunSummary(params: {
   const threshold_alerts = await computeThresholdAlerts(params.project_path, params.feature_id, metrics);
   (summary as any).threshold_alerts = threshold_alerts;
 
+  if (v === "minimal") {
+    return {
+      run_id: summary.run_id,
+      feature_id: summary.feature_id,
+      outcome: summary.outcome,
+      pipeline_score: summary.pipeline_score,
+      total_duration_ms: summary.total_duration_ms,
+      total_fix_loops: summary.total_fix_loops,
+      first_pass_rate: summary.first_pass_rate,
+    };
+  }
+  if (v === "standard") {
+    return {
+      run_id: summary.run_id,
+      feature_id: summary.feature_id,
+      feature_type: summary.feature_type,
+      complexity: summary.complexity,
+      outcome: summary.outcome,
+      pipeline_score: summary.pipeline_score,
+      total_duration_ms: summary.total_duration_ms,
+      total_tokens: summary.total_tokens,
+      total_fix_loops: summary.total_fix_loops,
+      verify_attempts: summary.verify_attempts,
+      review_attempts: summary.review_attempts,
+      first_pass_rate: summary.first_pass_rate,
+      phases_executed: summary.phases_executed,
+      phases_skipped: summary.phases_skipped,
+      avg_confidence: summary.avg_confidence,
+      threshold_alerts,
+    };
+  }
   return summary;
 }
 
@@ -348,6 +405,7 @@ export async function handleGetAnalytics(params: {
   date_from?:    string;
   date_to?:      string;
   ema_alpha?:    number;
+  verbosity?:    string;
 }): Promise<unknown> {
   const alpha = params.ema_alpha ?? 0.3;
 
@@ -443,6 +501,40 @@ export async function handleGetAnalytics(params: {
       first_pass_rate:   buildTrend(fprValues),
       total_duration_ms: buildTrend(durValues),
       avg_confidence:    buildTrend(confValues),
+    };
+  }
+
+  const vAnalytics = resolveVerbosity(params.verbosity);
+
+  if (vAnalytics === "minimal") {
+    return {
+      runs_analyzed: summaries.length,
+      first_pass_rate_history,
+      high_variance_phases,
+      trend_directions: trends ? {
+        pipeline_score:    (trends as any).pipeline_score?.direction ?? null,
+        first_pass_rate:   (trends as any).first_pass_rate?.direction ?? null,
+        total_duration_ms: (trends as any).total_duration_ms?.direction ?? null,
+      } : null,
+    };
+  }
+
+  if (vAnalytics === "standard") {
+    // Strip raw_ema arrays from trends (biggest bloat source)
+    const trimmedTrends = trends ? Object.fromEntries(
+      Object.entries(trends as Record<string, any>).map(([k, v]) => {
+        if (!v) return [k, null];
+        const { raw_ema, ...rest } = v;
+        return [k, rest];
+      }),
+    ) : null;
+    return {
+      runs_analyzed: summaries.length,
+      avg_duration_by_phase,
+      avg_fix_loops_by_feature_type,
+      first_pass_rate_history,
+      high_variance_phases,
+      trends: trimmedTrends,
     };
   }
 

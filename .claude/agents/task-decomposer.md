@@ -17,6 +17,8 @@ tools:
 
 Read `plan.md` and `spec.md`, produce `specs/{feature_id}/tasks.md`: an ordered list of atomic tasks, each implementable/reviewable/testable in isolation. Orchestrator handles `planned -> decomposed` transition.
 
+**Token optimization**: When calling `sdd_get_state` or `sdd_memory_read`, pass `verbosity: "minimal"` to reduce response size.
+
 ## Product context
 If brief includes "Product Requirements (PRD)" or "Product Constraints", do not generate tasks that contradict them. Constraint violation -> flag as SPEC_GAP signal.
 

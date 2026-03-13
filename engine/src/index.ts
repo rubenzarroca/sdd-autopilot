@@ -25,6 +25,7 @@ import {
   handleUpdateTask,
   handleUpdateFeature,
   handleTickMaintenance,
+  handleRefreshState,
 } from "./handlers.js";
 
 import {
@@ -72,6 +73,7 @@ export const TOOLS = [
         project_path: { type: "string", description: "Absolute path to the project root" },
         feature_id: { type: "string", description: "Optional: specific feature to query" },
         include_run_log: { type: "boolean", description: "Optional: if true and feature_id is set, include live run status" },
+        verbosity: { type: "string", enum: ["minimal", "standard", "full"], description: "Response detail level (default: full). minimal=IDs+status only, standard=+tasks/summaries, full=everything (backward compatible)" },
       },
       required: ["project_path"],
     },
@@ -150,6 +152,7 @@ export const TOOLS = [
       type: "object" as const,
       properties: {
         phase_id: { type: "string", description: "Phase identifier (e.g. 'specify', 'plan', 'verify')" },
+        verbosity: { type: "string", enum: ["minimal", "standard", "full"], description: "Response detail level (default: full). Use 'minimal' or 'standard' to reduce token usage." },
       },
       required: ["phase_id"],
     },
@@ -187,6 +190,7 @@ export const TOOLS = [
           description: "Map of artifact name to file path (relative to project_path)",
           additionalProperties: { type: "string" },
         },
+        verbosity: { type: "string", enum: ["minimal", "standard", "full"], description: "Response detail level (default: full). Use 'minimal' or 'standard' to reduce token usage." },
       },
       required: ["phase_id", "project_path", "feature_id", "artifacts"],
     },
@@ -319,6 +323,7 @@ export const TOOLS = [
           enum: ["project", "user"],
           description: "Memory scope (default: project)",
         },
+        verbosity: { type: "string", enum: ["minimal", "standard", "full"], description: "Response detail level (default: full). minimal=content_length only, standard=truncated, full=everything (backward compatible)" },
       },
       required: ["project_path", "section"],
     },
@@ -481,6 +486,7 @@ export const TOOLS = [
         feature_id:       { type: "string", description: "Feature identifier" },
         run_id:           { type: "string", description: "Optional: validate that summary.json matches this run_id" },
         review_decision:  { type: ["string", "null"], enum: ["approve", "request_changes", "reject", null], description: "Review decision from code-review. Omit to preserve existing value. Pass null for Express mode (no review)." },
+        verbosity: { type: "string", enum: ["minimal", "standard", "full"], description: "Response detail level (default: full). Use 'minimal' or 'standard' to reduce token usage." },
       },
       required: ["project_path", "feature_id"],
     },
@@ -540,6 +546,7 @@ export const TOOLS = [
         status:        { type: "string", enum: ["candidate", "active", "decayed", "all"], description: "Default: active" },
         feature_type:  { type: "string", description: "Optional: match patterns whose condition includes this feature_type" },
         complexity:    { type: "string", description: "Optional: match patterns whose condition includes this complexity" },
+        verbosity:     { type: "string", enum: ["minimal", "standard", "full"], description: "Response detail level (default: full). Use 'minimal' or 'standard' to reduce token usage." },
       },
       required: ["project_path"],
     },
@@ -814,6 +821,7 @@ export const TOOLS = [
         project_path: { type: "string", description: "Absolute path to the project root" },
         feature_type: { type: "string", description: "Feature type (e.g. 'api', 'ui', 'refactor')" },
         complexity:   { type: "string", description: "Feature complexity: low, medium, high, critical" },
+        verbosity:    { type: "string", enum: ["minimal", "standard", "full"], description: "Response detail level (default: full). Use 'minimal' or 'standard' to reduce token usage." },
       },
       required: ["project_path", "feature_type", "complexity"],
     },
@@ -988,6 +996,7 @@ export const TOOLS = [
         feature_id:   { type: "string", description: "Feature identifier" },
         run_id:       { type: "string", description: "Optional: filter to a specific run_id" },
         last_n_runs:  { type: "number", description: "Optional: return last N historical summaries from analytics/history.jsonl" },
+        verbosity:    { type: "string", enum: ["minimal", "standard", "full"], description: "Response detail level (default: full). Use 'minimal' or 'standard' to reduce token usage." },
       },
       required: ["project_path", "feature_id"],
     },
@@ -1031,6 +1040,7 @@ export const TOOLS = [
         date_from:    { type: "string", description: "Optional: ISO8601 start date filter (inclusive)" },
         date_to:      { type: "string", description: "Optional: ISO8601 end date filter (inclusive)" },
         ema_alpha:    { type: "number", description: "Optional: EMA smoothing factor (0-1). Default 0.3. Higher = more reactive, lower = smoother." },
+        verbosity:    { type: "string", enum: ["minimal", "standard", "full"], description: "Response detail level (default: full). Use 'minimal' or 'standard' to reduce token usage." },
       },
       required: ["project_path"],
     },
@@ -1341,6 +1351,32 @@ export const TOOLS = [
       },
     },
   },
+  {
+    name: "sdd_refresh_state",
+    description:
+      "Force-reload the in-memory state cache from disk. Use when an external agent modified " +
+      ".sdd/state.json directly (outside MCP tools). Contracts and specs are read from disk on each " +
+      "call and do not need refreshing.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        project_path: { type: "string", description: "Absolute path to the project root" },
+        scope: { type: "string", enum: ["all", "state"], description: "What to refresh (default: all). Only 'state' is cached; contracts/specs are always read from disk." },
+      },
+      required: ["project_path"],
+    },
+    outputSchema: {
+      type: "object" as const,
+      description: "Cache refresh confirmation",
+      properties: {
+        refreshed:       { type: "boolean", description: "Always true on success" },
+        scope:           { type: "string", description: "The scope that was refreshed" },
+        timestamp:       { type: "string", description: "ISO8601 timestamp of the refresh" },
+        caches_cleared:  { type: "array", items: { type: "string" }, description: "Which caches were cleared" },
+        note:            { type: "string", description: "Clarification about what is/isn't cached" },
+      },
+    },
+  },
 ];
 
 // ─── Tool dispatcher ─────────────────────────────────────────────
@@ -1349,6 +1385,7 @@ type HandlerFn = (params: any) => Promise<unknown>;
 
 export const HANDLER_MAP: Record<string, HandlerFn> = {
   sdd_get_state: handleGetState,
+  sdd_refresh_state: handleRefreshState,
   sdd_transition: handleTransition,
   sdd_get_contract: handleGetContract,
   sdd_evaluate_gate: handleEvaluateGate,

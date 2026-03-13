@@ -11,6 +11,8 @@ If `sdd_transition` returns an error:
 
 **NEVER edit state.json to bypass a failed transition.** The state machine in `state.ts` is the single source of truth. Direct edits bypass governance, skip precondition checks, and corrupt the audit trail. The only acceptable direct writes to state.json are: creating the initial feature entry and registering tasks after decomposition.
 
+**Stale cache recovery**: If `sdd_get_state` returns stale data after a known external write to `state.json`, call `sdd_refresh_state(project_path)` to invalidate the in-memory cache, then retry `sdd_get_state`.
+
 ## Escalation protocol
 
 1. Write escalation report to `.sdd/escalation/{feature}/{timestamp}.md`

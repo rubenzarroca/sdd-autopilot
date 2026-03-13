@@ -89,7 +89,9 @@ USER (Claude Code CLI)
 |              tasks.ts ---- observability.ts -- metacognition.ts |
 |              utils.ts (fileExists . parseJsonl)                 |
 |                                                                |
-|  36 tools (see docs/tools.md for full reference)               |
+|  37 tools (see docs/tools.md for full reference)               |
+|  10 read tools support verbosity param (minimal/standard/full) |
+|  In-memory state cache with sdd_refresh_state escape hatch     |
 +----------------------------+----------------------------------+
                              |  R/W
                              v
@@ -177,7 +179,7 @@ sdd-autopilot/
 |
 +-- engine/                  # MCP server (TypeScript, stdio transport)
 |   +-- src/
-|   |   +-- index.ts         # Entry point -- 36 sdd_* tools registered
+|   |   +-- index.ts         # Entry point -- 37 sdd_* tools registered
 |   |   +-- handlers.ts      # Core deterministic tool handlers
 |   |   +-- state.ts         # StateManager + AGENT_PERMISSIONS governance
 |   |   +-- memory.ts        # Two-layer memory (project + user scope)
@@ -189,7 +191,7 @@ sdd-autopilot/
 |   |   +-- contracts.json   # Pipeline phase definitions (single source of truth)
 |   +-- tests/
 |   |   +-- e2e/             # Behavioral pipeline tests (23 tests)
-|   +-- test-e2e.mjs         # Mechanical tests (270+ assertions, no API calls)
+|   +-- test-e2e.mjs         # Mechanical tests (303+ assertions, no API calls)
 |   +-- scripts/
 |   |   +-- compute-tools-hash.mjs  # SHA-256 hash of tool definitions
 |   +-- tools-manifest.json  # Tool manifest for drift detection

@@ -14,6 +14,14 @@ import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
 import { fileExists, atomicAppendJSONL } from "./utils.js";
 
+// ─── Verbosity types ────────────────────────────────────────────
+export type Verbosity = "minimal" | "standard" | "full";
+
+function resolveVerbosity(v?: string): Verbosity {
+  if (v === "minimal" || v === "standard" || v === "full") return v;
+  return "full";
+}
+
 // ─── Load contracts.json at startup ──────────────────────────────
 
 const __filename = fileURLToPath(import.meta.url);
@@ -29,13 +37,32 @@ try {
   contracts = JSON.parse(readFileSync(altPath, "utf-8")) as PipelineContracts;
 }
 
+// ─── 0. sdd_refresh_state ─────────────────────────────────────────
+
+export async function handleRefreshState(params: {
+  project_path: string;
+  scope?: "all" | "state";
+}): Promise<unknown> {
+  const scope = params.scope ?? "all";
+  StateManager.invalidate(params.project_path);
+  return {
+    refreshed: true,
+    scope,
+    timestamp: new Date().toISOString(),
+    caches_cleared: ["state"],
+    note: "contracts and specs are read from disk on each call — no cache to invalidate",
+  };
+}
+
 // ─── 1. sdd_get_state ─────────────────────────────────────────────
 
 export async function handleGetState(params: {
   project_path: string;
   feature_id?: string;
   include_run_log?: boolean;
+  verbosity?: string;
 }): Promise<unknown> {
+  const v = resolveVerbosity(params.verbosity);
   const sm = new StateManager(params.project_path);
   const exists = await sm.exists();
   if (!exists) {
@@ -47,6 +74,51 @@ export async function handleGetState(params: {
     if (!feature) {
       return { error: `Feature "${params.feature_id}" not found` };
     }
+
+    // ── minimal: just the essentials for pipeline routing
+    if (v === "minimal") {
+      return {
+        feature_id: params.feature_id,
+        state: feature.state,
+        spec_path: feature.spec_path,
+        plan_path: feature.plan_path,
+        tasks_path: feature.tasks_path,
+        worktree_path: feature.worktree_path,
+        branch: feature.branch,
+        skip_worktree: (feature as any).skip_worktree,
+        verification_attempts: feature.verification_attempts,
+        review_attempts: feature.review_attempts,
+        fix_loop_attempts: feature.fix_loop_attempts,
+        fix_review_attempts: feature.fix_review_attempts,
+        tasks_summary: {
+          total: Object.keys(feature.tasks).length,
+          completed: Object.values(feature.tasks).filter(t => t.status === "completed").length,
+        },
+      };
+    }
+
+    // ── standard: above + task list, no transitions/signals
+    if (v === "standard") {
+      return {
+        feature_id: params.feature_id,
+        state: feature.state,
+        spec_path: feature.spec_path,
+        plan_path: feature.plan_path,
+        tasks_path: feature.tasks_path,
+        worktree_path: feature.worktree_path,
+        branch: feature.branch,
+        skip_worktree: (feature as any).skip_worktree,
+        verification_attempts: feature.verification_attempts,
+        review_attempts: feature.review_attempts,
+        fix_loop_attempts: feature.fix_loop_attempts,
+        fix_review_attempts: feature.fix_review_attempts,
+        tasks: feature.tasks,
+        signals_count: feature.signals.length,
+        transitions_count: feature.transitions.length,
+      };
+    }
+
+    // ── full: backward-compatible, everything
     const result: Record<string, unknown> = { feature_id: params.feature_id, ...feature };
 
     // Optionally include live run status (inline)
@@ -87,6 +159,29 @@ export async function handleGetState(params: {
 
     return result;
   }
+
+  // Full state (no feature_id) — apply verbosity
+  if (v === "minimal") {
+    return {
+      active_feature: state.active_feature,
+      feature_count: Object.keys(state.features).length,
+      features_summary: Object.entries(state.features).map(([id, f]) => ({ id, state: f.state })),
+    };
+  }
+  if (v === "standard") {
+    return {
+      version: state.version,
+      project: state.project,
+      active_feature: state.active_feature,
+      features_summary: Object.entries(state.features).map(([id, f]) => ({
+        id,
+        state: f.state,
+        spec_path: f.spec_path,
+        tasks_total: Object.keys(f.tasks).length,
+        tasks_completed: Object.values(f.tasks).filter(t => t.status === "completed").length,
+      })),
+    };
+  }
   return state;
 }
 
@@ -115,7 +210,6 @@ export async function handleTransition(params: {
     return {
       success: true,
       new_state: result.to,
-      feature: await sm.getFeature(params.feature_id),
     };
   }
 
@@ -141,10 +235,32 @@ export async function handleTransition(params: {
 
 export async function handleGetContract(params: {
   phase_id: string;
+  verbosity?: string;
 }): Promise<unknown> {
-  const contract = contracts.contracts[params.phase_id];
+  const v = resolveVerbosity(params.verbosity);
+  const contract = contracts.contracts[params.phase_id] as unknown as Record<string, unknown> | undefined;
   if (!contract) {
     return { error: `Phase "${params.phase_id}" not found in contracts.json. Available phases: ${Object.keys(contracts.contracts).join(", ")}` };
+  }
+  if (v === "minimal") {
+    return {
+      phase_id: params.phase_id,
+      agent: contract.agent,
+      model: contract.model,
+      next: contract.next,
+    };
+  }
+  if (v === "standard") {
+    return {
+      phase_id: params.phase_id,
+      agent: contract.agent,
+      model: contract.model,
+      gate: contract.gate,
+      execution: contract.execution,
+      fix_loop: contract.fix_loop,
+      failure_modes: contract.failure_modes,
+      next: contract.next,
+    };
   }
   return contract;
 }
@@ -157,6 +273,7 @@ export async function handleEvaluateGate(params: {
   feature_id: string;
   artifacts: Record<string, string>;
   execution_mode?: string;
+  verbosity?: string;
 }): Promise<unknown> {
   const contract = contracts.contracts[params.phase_id];
   if (!contract) {
@@ -313,7 +430,19 @@ export async function handleEvaluateGate(params: {
   }
 
   const allPassed = checks.every(c => c.passed) && !needsSemantic;
+  const v = resolveVerbosity(params.verbosity);
 
+  if (v === "minimal") {
+    const result: Record<string, unknown> = {
+      passed: allPassed,
+      checks_total: checks.length,
+      checks_failed: checks.filter(c => !c.passed).length,
+    };
+    if (needsSemantic) result.needs_semantic_validation = true;
+    return result;
+  }
+
+  // standard and full both include checks; full adds nothing extra here
   const result: Record<string, unknown> = {
     passed: allPassed,
     checks,
@@ -532,16 +661,30 @@ export async function handleMemoryRead(params: {
   project_path: string;
   section: "project_conventions" | "learned_patterns" | "run_history" | "all";
   scope?: "project" | "user";
+  verbosity?: string;
 }): Promise<unknown> {
+  const v = resolveVerbosity(params.verbosity);
   const mm = new MemoryManager(params.project_path);
   const scope = params.scope ?? "project";
+
+  // Helper: trim content for minimal/standard verbosity
+  const trimContent = (raw: string): string => {
+    if (v === "full") return raw;
+    if (v === "minimal") return raw.slice(0, 200) + (raw.length > 200 ? "…" : "");
+    // standard: first 500 chars
+    return raw.slice(0, 500) + (raw.length > 500 ? "…" : "");
+  };
 
   if (scope === "project") {
     const mem = mm.readProjectMemory();
     if (params.section === "all") {
+      const raw = JSON.stringify(mem);
+      if (v === "minimal") {
+        return { section: "all", scope: "project", content_length: raw.length };
+      }
       return {
-        content: JSON.stringify(mem),
-        entries: [wrapWithDefaultMetadata(JSON.stringify(mem))],
+        content: trimContent(raw),
+        entries: v === "full" ? [wrapWithDefaultMetadata(raw)] : undefined,
         section: "all",
         scope: "project",
       };
@@ -554,15 +697,27 @@ export async function handleMemoryRead(params: {
       case "run_history": content = mem.runHistory; break;
       default: content = "";
     }
-    return { content, entries: [wrapWithDefaultMetadata(content)], section: params.section, scope: "project" };
+    if (v === "minimal") {
+      return { section: params.section, scope: "project", content_length: content.length };
+    }
+    return {
+      content: trimContent(content),
+      entries: v === "full" ? [wrapWithDefaultMetadata(content)] : undefined,
+      section: params.section,
+      scope: "project",
+    };
   }
 
   // User scope
   const mem = mm.readUserMemory();
   if (params.section === "all") {
+    const raw = JSON.stringify(mem);
+    if (v === "minimal") {
+      return { section: "all", scope: "user", content_length: raw.length };
+    }
     return {
-      content: JSON.stringify(mem),
-      entries: [wrapWithDefaultMetadata(JSON.stringify(mem))],
+      content: trimContent(raw),
+      entries: v === "full" ? [wrapWithDefaultMetadata(raw)] : undefined,
       section: "all",
       scope: "user",
     };
@@ -575,9 +730,12 @@ export async function handleMemoryRead(params: {
   };
   const field = userSectionMap[params.section as string];
   const content = field ? mem[field] : JSON.stringify(mem);
+  if (v === "minimal") {
+    return { section: params.section, scope: "user", content_length: content.length };
+  }
   return {
-    content,
-    entries: [wrapWithDefaultMetadata(content)],
+    content: trimContent(content),
+    entries: v === "full" ? [wrapWithDefaultMetadata(content)] : undefined,
     section: params.section,
     scope: "user",
   };

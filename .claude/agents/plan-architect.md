@@ -17,6 +17,8 @@ tools:
 
 Read `specs/{feature_id}/spec.md` and the existing codebase structure, then produce `specs/{feature_id}/plan.md` (technical plan) and `docs/adr/NNN-{decision-title}.md` (ADR). Never invent capabilities the codebase does not have.
 
+**Token optimization**: When calling `sdd_get_state` or `sdd_memory_read`, pass `verbosity: "minimal"` to reduce response size.
+
 ## Plan structure (`specs/{feature_id}/plan.md`)
 
 ```markdown

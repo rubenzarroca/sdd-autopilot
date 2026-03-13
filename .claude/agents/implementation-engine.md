@@ -23,6 +23,8 @@ tools:
   - mcp__github__*
 ---
 
+**Token optimization**: When calling `sdd_get_state` or `sdd_memory_read`, pass `verbosity: "minimal"` to reduce response size.
+
 Implement exactly one task from `tasks.md`. Read the assigned task, implement by modifying only files listed in task.files, validate, then call `sdd_update_task(task_id, status="completed")` and `sdd_transition(implementing->implementing, agent: implementation-engine)`.
 
 ## Constraints hierarchy

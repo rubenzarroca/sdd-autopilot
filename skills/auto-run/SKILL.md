@@ -240,13 +240,13 @@ Execute phases sequentially. Each phase follows the phase protocol below.
 
 For each phase:
 
-1. If the previous phase's `sdd_transition` response included a `feature` snapshot, use it as the current feature state (cache hit — no MCP call needed). Only call `sdd_get_state` if: (a) this is the first phase (triage), (b) recovering from an error, or (c) no snapshot is available from the previous transition.
-2. Call `sdd_get_contract` for the current phase (required inputs, gate checks, pair_review, fix_loop config)
-3. Check the contract's `input.optional` for `memory.*` entries. If present, call `sdd_memory_read` for those sections only. If no `memory.*` entries exist in the contract, skip this step entirely (triage, tasks, review, and pr have no memory entries — do NOT call `sdd_memory_read` for them). Phase-to-memory mapping: specify → `project_conventions`; plan → `learned_patterns` (maps to `architectural_patterns`); implement → `project_conventions` + `learned_patterns`; verify → `project_conventions`.
+1. If the previous phase's `sdd_transition` response included a `feature` snapshot, use it as the current feature state (cache hit — no MCP call needed). Only call `sdd_get_state` if: (a) this is the first phase (triage), (b) recovering from an error, or (c) no snapshot is available from the previous transition. **Use `verbosity: "minimal"` for mid-pipeline state checks** (returns state + tasks summary without transitions/signals). Use default (`"full"`) only when you need the complete state (e.g., post-pipeline, error recovery).
+2. Call `sdd_get_contract` for the current phase with `verbosity: "minimal"` (returns agent, model, next — sufficient for routing). Use `"standard"` if you need gate/fix_loop config, `"full"` only when debugging.
+3. Check the contract's `input.optional` for `memory.*` entries. If present, call `sdd_memory_read` with `verbosity: "standard"` (truncated to 500 chars — sufficient for context injection). If no `memory.*` entries exist in the contract, skip this step entirely (triage, tasks, review, and pr have no memory entries — do NOT call `sdd_memory_read` for them). Phase-to-memory mapping: specify → `project_conventions`; plan → `learned_patterns` (maps to `architectural_patterns`); implement → `project_conventions` + `learned_patterns`; verify → `project_conventions`.
 4. Read ONLY artifact files listed in the contract's `input.required`. **NEVER pre-research codebase for subagents.**
 5. If `--pair-review` flag AND contract has `pair_review.enabled = true`: launch subagent, then opus-coach. If critical finding: re-launch with feedback.
 6. If no pair-review: launch the subagent directly
-7. Call `sdd_evaluate_gate` with the produced artifacts
+7. Call `sdd_evaluate_gate` with the produced artifacts and `verbosity: "minimal"` (returns passed/failed + counts only — sufficient for routing decisions)
 8. If gate passed:
    - For `gate.type = "mechanical"` or `"haiku-validator"`: call `sdd_transition`
    - For `gate.type = "self"` (verify, review): transition depends on structured output:
@@ -421,5 +421,5 @@ For post-pipeline iteration tracking, see `docs/orchestrator/post-pipeline.md` �
 
 $ARGUMENTS
 
-<!-- Coverage audit: 34/39 tools scripted (31 original + sdd_get_strategy + 3 tool-factory tools). 5 utility tools correctly excluded.
-     Last updated: 2026-03-07. See patches/ for design documents. -->
+<!-- Coverage audit: 35/40 tools scripted (31 original + sdd_get_strategy + 3 tool-factory tools + sdd_refresh_state). 5 utility tools correctly excluded.
+     Last updated: 2026-03-13. See patches/ for design documents. -->

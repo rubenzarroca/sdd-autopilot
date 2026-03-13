@@ -6,6 +6,10 @@ Call `mcp__sdd-autopilot__sdd_log_event` at these exact moments. No wrapper, no 
 
 These signatures are used throughout the pipeline. Reference by name instead of repeating the full call.
 
+### Verbosity convention
+
+Read tools that support `verbosity` should be called with `verbosity: "minimal"` during pipeline execution to reduce token usage. The orchestrator gets full responses only when it needs detailed data (e.g., post-pipeline scoring). Affected tools: `sdd_get_state`, `sdd_get_contract`, `sdd_evaluate_gate`, `sdd_memory_read`, `sdd_get_run_summary`, `sdd_get_analytics`, `sdd_compute_score`, `sdd_get_patterns`, `sdd_get_strategy`, `sdd_phase_confidence`.
+
 ### sdd_log_event (LOG)
 ```
 sdd_log_event(project_path, feature_id, event_type="{type}", phase="{phase}", agent_id="orchestrator",
@@ -25,6 +29,12 @@ sdd_emit_metrics(project_path, metrics={
 ```
 sdd_memory_write(project_path, scope="project", content="...", section="...")
 ```
+
+### sdd_refresh_state (REFRESH)
+```
+sdd_refresh_state(project_path, scope="all"|"state")
+```
+Use after an external process writes to `state.json` directly. Forces the next `sdd_get_state` to reload from disk.
 
 ## Log event types
 

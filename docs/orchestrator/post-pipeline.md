@@ -6,7 +6,7 @@ After PR creation (or after pipeline termination if it did not reach PR):
 
 ## Step 1 — Run summary
 
-Call `sdd_get_run_summary` with `project_path`, `feature_id`, and the `run_id`. This aggregates all PhaseMetrics into a RunSummary, persists `summary.json` (merge-aware: preserves prior `review_decision` and `pipeline_score` on re-run), and appends to `analytics/history.jsonl`.
+Call `sdd_get_run_summary` with `project_path`, `feature_id`, and the `run_id`. Use default verbosity (`"full"`) here — the post-pipeline needs the complete RunSummary including phase_metrics and threshold_alerts. This aggregates all PhaseMetrics into a RunSummary, persists `summary.json` (merge-aware: preserves prior `review_decision` and `pipeline_score` on re-run), and appends to `analytics/history.jsonl`.
 
 **Write-on-generate — persist Run History to memory immediately:**
 ```
@@ -16,7 +16,7 @@ This ensures the run entry is persisted even if later steps are lost to context 
 
 ## Step 2 — Compute score + review decision
 
-Call `sdd_compute_score` with `project_path`, `feature_id`, and `review_decision`. Pass the review decision from the code-review result:
+Call `sdd_compute_score` with `project_path`, `feature_id`, and `review_decision`. Use default verbosity (`"full"`) — the golden_comparison details are needed for steps 5 and adaptive run close. Pass the review decision from the code-review result:
 - If code-review ran: `review_decision="approve"` / `"request_changes"` / `"reject"`
 - If Express mode (no code-review): `review_decision=null`
 - If review was skipped for another reason: omit `review_decision` to preserve existing value

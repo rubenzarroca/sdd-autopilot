@@ -26,6 +26,7 @@ import {
   handleTickMaintenance,
   handleUpdateTask,
   handleUpdateFeature,
+  handleRefreshState,
 } from "./build/handlers.js";
 import {
   handleEmitMetrics,
@@ -1355,6 +1356,110 @@ assert("propose_evolution duplicate id returns error", typeof h.error === "strin
 const allEvolutions = JSON.parse(readFileSync(evolutionsPath, "utf-8"));
 assert("evolutions.json has 6 entries", allEvolutions.length === 6);
 assert("all evolutions have status=proposed", allEvolutions.every(e => e.status === "proposed"));
+
+// ── Test 24: sdd_refresh_state (8-step cache alignment) ──────────
+console.log("\n=== Test 24: sdd_refresh_state (8-step cache alignment) ===");
+
+// Use a fresh project for cache tests
+const cacheProjectPath = join(tmpdir(), "test-sdd-cache-" + Date.now());
+mkdirSync(cacheProjectPath, { recursive: true });
+const cacheSm = new StateManager(cacheProjectPath);
+await cacheSm.init("cache-test");
+await cacheSm.createFeature("cache-feat");
+
+// Step 1: Start MCP server (cache loads on first read)
+// Step 2: get_state returns current state (from cache)
+h = await handleGetState({ project_path: cacheProjectPath, feature_id: "cache-feat", verbosity: "full" });
+assert("cache step 2: get_state returns draft", h.state === "draft");
+
+// Step 3: transition to specified → writes to disk, updates cache
+await cacheSm.transition("cache-feat", "specified", "spec-generator", "test");
+
+// Step 4: get_state must return NEW state (cache was updated by write)
+h = await handleGetState({ project_path: cacheProjectPath, feature_id: "cache-feat", verbosity: "full" });
+assert("cache step 4: get_state returns specified after transition", h.state === "specified");
+
+// Step 5: Manually edit state.json outside MCP (simulate external agent)
+const cacheStatePath = join(cacheProjectPath, ".sdd", "state.json");
+const rawState = JSON.parse(readFileSync(cacheStatePath, "utf-8"));
+rawState.features["cache-feat"].state = "planned";
+writeFileSync(cacheStatePath, JSON.stringify(rawState, null, 2), "utf-8");
+
+// Step 6: get_state returns STALE state (expected — cache doesn't know about external write)
+h = await handleGetState({ project_path: cacheProjectPath, feature_id: "cache-feat", verbosity: "full" });
+assert("cache step 6: get_state returns stale (specified, not planned)", h.state === "specified");
+
+// Step 7: refresh_state forces reload
+h = await handleRefreshState({ project_path: cacheProjectPath });
+assert("cache step 7: refresh_state returns refreshed=true", h.refreshed === true);
+assert("cache step 7: refresh_state returns scope", typeof h.scope === "string");
+assert("cache step 7: refresh_state returns timestamp", typeof h.timestamp === "string");
+assert("cache step 7: refresh_state returns caches_cleared", Array.isArray(h.caches_cleared));
+
+// Step 8: get_state returns externally modified state
+h = await handleGetState({ project_path: cacheProjectPath, feature_id: "cache-feat", verbosity: "full" });
+assert("cache step 8: get_state returns planned after refresh", h.state === "planned");
+
+// Scoped refresh
+h = await handleRefreshState({ project_path: cacheProjectPath, scope: "state" });
+assert("cache: scoped refresh returns scope=state", h.scope === "state");
+
+// ── Test 25: Verbosity levels ────────────────────────────────────
+console.log("\n=== Test 25: Verbosity levels ===");
+
+// get_state minimal — single feature
+h = await handleGetState({ project_path: cacheProjectPath, feature_id: "cache-feat", verbosity: "minimal" });
+assert("verbosity minimal: has state", typeof h.state === "string");
+assert("verbosity minimal: has tasks_summary", typeof h.tasks_summary === "object");
+assert("verbosity minimal: no transitions array", h.transitions === undefined);
+assert("verbosity minimal: no signals array", h.signals === undefined);
+
+// get_state standard — single feature
+h = await handleGetState({ project_path: cacheProjectPath, feature_id: "cache-feat", verbosity: "standard" });
+assert("verbosity standard: has tasks object", typeof h.tasks === "object");
+assert("verbosity standard: has signals_count", typeof h.signals_count === "number");
+assert("verbosity standard: no transitions array", h.transitions === undefined);
+
+// get_state full — single feature (backward compatible)
+h = await handleGetState({ project_path: cacheProjectPath, feature_id: "cache-feat", verbosity: "full" });
+assert("verbosity full: has transitions array", Array.isArray(h.transitions));
+assert("verbosity full: has signals array", Array.isArray(h.signals));
+
+// get_state minimal — full state (no feature_id)
+h = await handleGetState({ project_path: cacheProjectPath, verbosity: "minimal" });
+assert("verbosity minimal full-state: has feature_count", typeof h.feature_count === "number");
+assert("verbosity minimal full-state: has features_summary", Array.isArray(h.features_summary));
+assert("verbosity minimal full-state: no version", h.version === undefined);
+
+// get_state standard — full state
+h = await handleGetState({ project_path: cacheProjectPath, verbosity: "standard" });
+assert("verbosity standard full-state: has version", typeof h.version === "string");
+assert("verbosity standard full-state: has features_summary", Array.isArray(h.features_summary));
+assert("verbosity standard full-state: no raw features map", h.features === undefined);
+
+// get_contract minimal
+h = await handleGetContract({ phase_id: "specify", verbosity: "minimal" });
+assert("get_contract minimal: has agent", h.agent === "spec-generator");
+assert("get_contract minimal: has next", typeof h.next === "string");
+assert("get_contract minimal: no gate", h.gate === undefined);
+assert("get_contract minimal: no failure_modes", h.failure_modes === undefined);
+
+// get_contract standard
+h = await handleGetContract({ phase_id: "specify", verbosity: "standard" });
+assert("get_contract standard: has gate", h.gate != null);
+assert("get_contract standard: has failure_modes", Array.isArray(h.failure_modes));
+
+// evaluate_gate minimal
+h = await handleEvaluateGate({
+  phase_id: "specify", project_path: cacheProjectPath, feature_id: "cache-feat",
+  artifacts: {}, verbosity: "minimal",
+});
+assert("evaluate_gate minimal: has passed", typeof h.passed === "boolean");
+assert("evaluate_gate minimal: has checks_total", typeof h.checks_total === "number");
+assert("evaluate_gate minimal: no checks array", h.checks === undefined);
+
+// Cleanup cache project
+try { rmSync(cacheProjectPath, { recursive: true }); } catch { /* ignore */ }
 
 // ── Cleanup ───────────────────────────────────────────────────────
 try {

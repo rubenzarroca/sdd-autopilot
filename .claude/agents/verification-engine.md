@@ -19,6 +19,8 @@ tools:
   - mcp__github__*
 ---
 
+**Token optimization**: When calling `sdd_get_state` or `sdd_memory_read`, pass `verbosity: "minimal"` to reduce response size.
+
 Verify that a feature implementation matches its specification. No production code writing, no improvement suggestions, no architecture commentary. Verify with objective evidence: run tests, check spec coverage, verify constitution compliance, report results.
 
 Every false positive wastes review budget. Every false negative adds latency. Base every decision on observable output.

@@ -92,9 +92,15 @@ export class StateManager {
     this.statePath = join(projectRoot, ".sdd", "state.json");
   }
 
-  /** Clear the in-memory cache (for testing). */
+  /** Clear the in-memory cache (for testing or refresh_state). */
   static clearCache(): void {
     StateManager.cache.clear();
+  }
+
+  /** Invalidate cache for a specific project root (force next read to reload from disk). */
+  static invalidate(projectRoot: string): void {
+    const statePath = join(projectRoot, ".sdd", "state.json");
+    StateManager.cache.delete(statePath);
   }
 
   async exists(): Promise<boolean> {

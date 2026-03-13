@@ -8,6 +8,13 @@ import { resolve, join } from "node:path";
 import type { RunSummary, ScoreWeights, CompositeScore, ExploitationPattern, Experiment, PipelineEvolution, PhaseMetrics } from "./types.js";
 import { fileExists, parseJsonl, atomicWriteJSON } from "./utils.js";
 
+// ─── Verbosity types ────────────────────────────────────────────
+type Verbosity = "minimal" | "standard" | "full";
+function resolveVerbosity(v?: string): Verbosity {
+  if (v === "minimal" || v === "standard" || v === "full") return v;
+  return "full";
+}
+
 // ─── Generic metacognition JSON helpers ──────────────────────────
 
 async function readMetacognitionJson<T>(projectPath: string, filename: string): Promise<T[]> {
@@ -222,6 +229,7 @@ export async function handleComputeScore(params: {
   feature_id:   string;
   run_id?:      string;
   review_decision?: "approve" | "request_changes" | "reject" | null;
+  verbosity?: string;
 }): Promise<unknown> {
   // Validate review_decision if explicitly provided
   if (params.review_decision !== undefined && params.review_decision !== null) {
@@ -326,6 +334,34 @@ export async function handleComputeScore(params: {
   const metacognitionDir = resolve(params.project_path, ".sdd", "metacognition");
   await mkdir(metacognitionDir, { recursive: true });
 
+  const vScore = resolveVerbosity(params.verbosity);
+
+  if (vScore === "minimal") {
+    return {
+      pipeline_score,
+      quality_score,
+      efficiency_score,
+      golden_status: golden_comparison.status,
+    };
+  }
+  if (vScore === "standard") {
+    return {
+      run_id: result.run_id,
+      feature_id: result.feature_id,
+      pipeline_score,
+      quality_score,
+      efficiency_score,
+      breakdown: result.breakdown,
+      weights_used: result.weights_used,
+      golden_comparison: {
+        status: golden_comparison.status,
+        golden_score: golden_comparison.golden_score,
+        delta: golden_comparison.delta,
+        trend: golden_comparison.trend,
+      },
+    };
+  }
+
   return { ...result, golden_comparison };
 }
 
@@ -383,6 +419,7 @@ export async function handleGetPatterns(params: {
   status?:       "candidate" | "active" | "decayed" | "all";
   feature_type?: string;
   complexity?:   string;
+  verbosity?:    string;
 }): Promise<unknown> {
   const all = await readPatterns(params.project_path);
   const statusFilter = params.status ?? "active";
@@ -414,6 +451,35 @@ export async function handleGetPatterns(params: {
       ((p.alpha + p.beta_param) ** 2 * (p.alpha + p.beta_param + 1));
     return { ...p, posterior_variance: pv };
   });
+
+  const vPatterns = resolveVerbosity(params.verbosity);
+
+  if (vPatterns === "minimal") {
+    return {
+      count: enriched.length,
+      patterns: enriched.map(p => ({
+        pattern_id: p.pattern_id,
+        type: p.type,
+        confidence: p.confidence,
+        status: p.status,
+      })),
+    };
+  }
+  if (vPatterns === "standard") {
+    return {
+      count: enriched.length,
+      patterns: enriched.map(p => ({
+        pattern_id: p.pattern_id,
+        type: p.type,
+        condition: p.condition,
+        action: p.action,
+        confidence: p.confidence,
+        status: p.status,
+        supporting_runs: p.supporting_runs,
+        posterior_variance: p.posterior_variance,
+      })),
+    };
+  }
 
   return { patterns: enriched, count: enriched.length };
 }
@@ -912,6 +978,7 @@ export async function handleGetStrategy(params: {
   project_path: string;
   feature_type: string;
   complexity:   string;
+  verbosity?:   string;
 }): Promise<unknown> {
   // Read active patterns matching this feature context
   const allPatterns = await readPatterns(params.project_path);
@@ -998,6 +1065,27 @@ export async function handleGetStrategy(params: {
         }
       }
     }
+  }
+
+  const vStrategy = resolveVerbosity(params.verbosity);
+
+  if (vStrategy === "minimal") {
+    return {
+      has_adaptations: applicable.length > 0 || activeExperiments.length > 0,
+      decision,
+      mutations: { phases_to_skip, model_overrides, gate_overrides },
+    };
+  }
+  if (vStrategy === "standard") {
+    return {
+      feature_type: params.feature_type,
+      complexity: params.complexity,
+      has_adaptations: applicable.length > 0 || activeExperiments.length > 0,
+      decision,
+      mutations: { phases_to_skip, model_overrides, gate_overrides, prompt_injections },
+      applicable_patterns: applicable.map(p => ({ pattern_id: p.pattern_id, type: p.type, confidence: p.confidence })),
+      active_experiments_count: activeExperiments.length,
+    };
   }
 
   return {

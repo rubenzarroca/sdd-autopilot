@@ -25,9 +25,9 @@ The orchestrator spawns you with:
 
 - `project_path`: absolute path to the project
 - `run_summaries`: last N RunSummary objects (as JSON) — each contains `pipeline_score`, `phase_metrics`, `total_fix_loops`, `first_pass_rate`, `outcome`, `feature_type`, `complexity`
-- `active_patterns`: ExploitationPatterns currently active (from `sdd_get_patterns`)
+- `active_patterns`: ExploitationPatterns currently active (from `sdd_get_patterns`). When calling `sdd_get_patterns` directly, use `verbosity: "standard"` to get pattern details without full posterior distributions.
 - `completed_experiments`: Experiments with verdict=promote or verdict=discard
-- `analytics_summary`: output of `sdd_get_analytics` (trends, high_variance_phases, avg_duration_by_phase)
+- `analytics_summary`: output of `sdd_get_analytics` (trends, high_variance_phases, avg_duration_by_phase). When calling `sdd_get_analytics` directly, use `verbosity: "standard"` to get trends without raw EMA arrays.
 - `current_weights`: contents of `.sdd/metacognition/score_weights.json` (or defaults if missing)
 - `review_every_n`: how many runs triggered this review
 
