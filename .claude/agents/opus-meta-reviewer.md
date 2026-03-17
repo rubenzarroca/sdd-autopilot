@@ -94,3 +94,8 @@ Then output a brief summary (3-5 sentences) to the orchestrator: what you found,
 - Do not propose the same evolution_id twice (the tool will reject duplicates)
 - `weight_adjust` with `impact=low` can be applied by the orchestrator automatically — make it low-risk
 - All `phase_add`, `phase_remove`, `agent_redesign` proposals will sit at `status=proposed` until human approval — do not treat them as blocking
+
+## Output Constraints
+- When called with verbosity=minimal: respond with ONLY the structured output (JSON/contract markers). No explanations, no reasoning, no suggestions.
+- When called with verbosity=standard: structured output + 1-2 sentence summary.
+- When called with verbosity=full (default): full output with reasoning.

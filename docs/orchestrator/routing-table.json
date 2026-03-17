@@ -1,0 +1,90 @@
+{
+  "description": "State → agent → context mapping for the SDD Autopilot orchestrator",
+  "routes": [
+    {
+      "state": "draft",
+      "agent": "spec-generator",
+      "transition": "draft -> specified",
+      "context": ["feature description", "PRD", "constraints", "worktree_path"]
+    },
+    {
+      "state": "specified",
+      "agent": "plan-architect",
+      "transition": "specified -> planned",
+      "context": ["spec.md", "memory", "worktree_path"]
+    },
+    {
+      "state": "planned",
+      "agent": "task-decomposer",
+      "transition": "planned -> decomposed",
+      "context": ["spec.md", "plan.md", "worktree_path"]
+    },
+    {
+      "state": "decomposed",
+      "agent": "implementation-engine",
+      "transition": "decomposed -> implementing",
+      "context": ["tasks.md", "spec.md", "worktree_path"]
+    },
+    {
+      "state": "implementing",
+      "agent": "implementation-engine",
+      "transition": "implementing -> implementing (self)",
+      "context": ["current task", "spec.md"]
+    },
+    {
+      "state": "fix_loop",
+      "agent": "implementation-engine",
+      "transition": "fix_loop -> implementing",
+      "context": ["VERIFICATION_RESULT findings", "spec.md", "failing tests"]
+    },
+    {
+      "state": "fix_review",
+      "agent": "implementation-engine",
+      "transition": "fix_review -> implementing",
+      "context": ["REVIEW_RESULT findings (blocking only)", "spec.md", "accumulated diff"]
+    },
+    {
+      "state": "implementing (all tasks done)",
+      "agent": "verification-engine",
+      "transition": "implementing -> verifying",
+      "context": ["spec.md", "accumulated diff"]
+    },
+    {
+      "state": "verifying (PASS)",
+      "agent": "orchestrator (inline)",
+      "transition": "verifying -> reviewing",
+      "context": ["runs review skill per routing rules"]
+    },
+    {
+      "state": "reviewing (APPROVE)",
+      "agent": "orchestrator (inline)",
+      "transition": "reviewing -> pr_created",
+      "context": ["runs PR creation"]
+    },
+    {
+      "state": "reviewing (REQUEST_CHANGES)",
+      "agent": "orchestrator (inline)",
+      "transition": "reviewing -> fix_review",
+      "context": ["delegates fix to implementation-engine"]
+    },
+    {
+      "state": "blocked",
+      "agent": "orchestrator",
+      "transition": "blocked -> implementing",
+      "context": ["human-provided resolution"]
+    },
+    {
+      "state": "awaiting_input",
+      "agent": "spec-generator",
+      "transition": "awaiting_input -> specified",
+      "context": ["human-provided clarification"]
+    }
+  ],
+  "review_routing": {
+    "express": "skipped",
+    "light": "/code-review:code-review",
+    "standard": "/code-review:code-review",
+    "full": "/pr-review-toolkit:review-pr code errors tests (fallback: /code-review:code-review)",
+    "full_opus": "opus-coach (when --opus-review flag set)"
+  }
+}

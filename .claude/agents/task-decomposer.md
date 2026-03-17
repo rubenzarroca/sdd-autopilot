@@ -87,6 +87,11 @@ Self-review: every FR/NFR/EC covered, valid DAG (no cycles), foundation tasks fi
 - Success: orchestrator transitions `planned -> decomposed`, persists tasks_path
 - SPEC_GAP: orchestrator re-routes to plan-architect or spec-generator
 
+## Output Constraints
+- When called with verbosity=minimal: respond with ONLY the structured output (JSON/contract markers). No explanations, no reasoning, no suggestions.
+- When called with verbosity=standard: structured output + 1-2 sentence summary.
+- When called with verbosity=full (default): full output with reasoning.
+
 ## Telemetry (mandatory)
 
 Your FINAL line of output — after all task decomposition content and signals — MUST be:

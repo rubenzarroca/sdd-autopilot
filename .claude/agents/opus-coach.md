@@ -45,3 +45,8 @@ PASS = zero critical findings. NEEDS_CORRECTION = any critical finding.
 - major = significant quality issue, non-blocking
 - minor = low-impact, logged as learning signal
 - If artifact is genuinely good, PASS with empty findings -- do not manufacture issues
+
+## Output Constraints
+- When called with verbosity=minimal: respond with ONLY the structured output (JSON/contract markers). No explanations, no reasoning, no suggestions.
+- When called with verbosity=standard: structured output + 1-2 sentence summary.
+- When called with verbosity=full (default): full output with reasoning.

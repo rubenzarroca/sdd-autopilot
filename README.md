@@ -1,98 +1,66 @@
 # SDD Autopilot
 
-Zero-stop, fully autonomous **specify -> plan -> tasks -> implement -> verify -> review -> PR** pipeline for Claude Code. Adaptive learning built in — each run makes the next one smarter.
+A Claude Code plugin that takes a one-sentence feature description and autonomously produces a reviewed pull request. It breaks the feature into a spec, plan, tasks, implementation, verification, and code review — each handled by a dedicated AI agent — so you get structured, repeatable feature development without managing the process yourself.
 
-Give it a feature description. Get back a reviewed PR.
+## Why
 
-## Pipeline
+Claude Code is great for ad-hoc coding tasks, but building a complete feature — with a spec, architecture decisions, task breakdown, implementation, tests, and review — requires you to drive every step. SDD Autopilot automates that entire ceremony. You describe what you want, it handles the how, and you review the PR.
 
-```
-Feature description -> Triage -> Specify -> Plan -> Tasks -> Implement -> Verify -> Review -> PR
-                       haiku     sonnet     sonnet  sonnet   sonnet       sonnet    plugin   inline
-```
-
-Sonnet handles the bulk work. Haiku runs triage. Review uses the `/code-review` plugin. PR creation runs inline in the orchestrator. Each phase is a dedicated native Claude Code subagent — no direct API calls.
-
-## Highlights
-
-- **Fully autonomous** — no human intervention from feature description to reviewed PR
-- **Adaptive learning** — observability layer records metrics; metacognition layer learns patterns across runs (80% exploitation / 20% exploration)
-- **37 MCP tools** — deterministic Node.js handlers for state, memory, gates, metrics, scoring, patterns, experiments, and evolution
-- **No API key needed** — Claude Code handles all model invocations through its native agent system
-- **Quality gates** — `/code-review` plugin review, delta checks on fix loops, z-score anomaly detection, optional Opus pair review (`--pair-review`)
-
-## Installation
-
-### From Claude Code marketplace
-
-Search for `sdd-autopilot` in the Claude Code plugin marketplace and install. The MCP server starts automatically.
-
-### From source
+## Quick Start
 
 ```bash
-git clone https://github.com/rubenzarroca/sdd-autopilot.git \
-  ~/.claude/plugins/local/sdd-autopilot
+# Install from Claude Code marketplace
+# Search for "sdd-autopilot" and install
 
-cd ~/.claude/plugins/local/sdd-autopilot/engine
-npm install && npm run build
+# Or from source:
+git clone https://github.com/rubenzarroca/sdd-autopilot.git ~/.claude/plugins/local/sdd-autopilot
+cd ~/.claude/plugins/local/sdd-autopilot/engine && npm install && npm run build
+
+# Run a feature:
+/sdd-auto:run health-check "Add a health check endpoint that returns server status"
 ```
 
-## Usage
+## How It Works
 
-### `/sdd-auto:run` — Run the full pipeline
+- **Triage** classifies your feature by complexity and picks the right execution mode (Express, Light, Standard, or Full)
+- **Spec/Plan/Tasks** phases generate structured artifacts that each subsequent phase builds on
+- **Implementation** runs one agent per task, with automatic parallelization for independent tasks
+- **Verification + Review** catch issues before the PR — with automated fix loops if something fails
+- **Adaptive learning** records metrics from every run and uses them to improve future runs
 
-```
-/sdd-auto:run health-check "Add a health check endpoint that returns server status and uptime"
-```
+For the full architecture, see [docs/architecture.md](docs/architecture.md).
 
-First argument is the spec name (becomes `specs/health-check/`), second is a one-sentence brief. Both are optional — the pipeline prompts for missing arguments and stays backwards compatible with `/sdd-auto:run "description"`.
+## Commands
 
-Autonomously generates spec, plan, tasks, implements, verifies, reviews, and opens a PR. After the pipeline completes, records phase metrics, computes a composite score, and updates learned patterns.
+| Command | Description |
+|---------|-------------|
+| `/sdd-auto:run [name] ["brief"]` | Run the full pipeline: triage through PR |
+| `/sdd-auto:init` | Initialize a project (creates `.sdd/state.json`, scaffolds docs) |
+| `/sdd-auto:status` | Show feature states, task progress, and score history |
 
-**Flags:** `--skip-worktree` (work in place), `--skip-pr` (skip PR creation)
+## Configuration
 
-### `/sdd-auto:init` — Initialize a project
+The pipeline selects an execution mode automatically based on feature complexity:
 
-```
-/sdd-auto:init
-```
-
-Creates `.sdd/state.json` in your project root. Optional — `/sdd-auto:run` auto-initializes if needed.
-
-### `/sdd-auto:status` — Check pipeline progress
-
-```
-/sdd-auto:status
-```
-
-Shows feature states, task progress, verification/review attempt counts, active signals, and a Spec TL;DR (scope, key decisions, out of scope, risks) extracted from the generated spec.
+| Mode | When | What runs |
+|------|------|-----------|
+| Express | Trivial changes | triage -> implement -> PR |
+| Light | Low complexity | triage -> specify -> implement -> verify -> PR |
+| Standard | Medium complexity | All 8 phases |
+| Full | High/critical | All 8 phases + optional Opus review (`--opus-review`) |
 
 ## Requirements
 
-- Claude Code with plugin support
-- Node.js 18+ (for the MCP server)
-- `git` and `gh` (GitHub CLI) for branch push + PR creation
+- Claude Code CLI with plugin support
+- Node.js 18+
+- `git` and `gh` (GitHub CLI) for PR creation
 
-## Testing
+## Links
 
-```bash
-cd engine
-npm run build
-
-# Mechanical tests — all tool handlers (303+ assertions)
-node test-e2e.mjs
-
-# Behavioral pipeline tests — full lifecycle scenarios (23 tests)
-npm run test:e2e
-```
-
-## Documentation
-
-- [Architecture](docs/architecture.md) — full architecture diagram, pipeline phases, state machine, file structure
-- [MCP Tools Reference](docs/tools.md) — all 37 tools across 4 categories
-- [Observability & Metacognition](docs/observability.md) — scoring, patterns, experiments, evolution
-- [Memory Intelligence](docs/memory.md) — two-layer model, provenance, sanitization, consolidation
-- [Example Run](docs/examples/health-check-endpoint/) — real pipeline output (spec, plan, tasks, ADR, run log)
+- [Architecture](docs/architecture.md) — pipeline phases, state machine, file structure
+- [Tools Reference](docs/tools.md) — all 37 MCP tools across 4 categories
+- [Non-Goals](docs/NON-GOALS.md) — what this project explicitly does not do
+- [Changelog](CHANGELOG.md)
 
 ## License
 

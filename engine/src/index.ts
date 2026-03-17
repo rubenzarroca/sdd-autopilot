@@ -26,6 +26,7 @@ import {
   handleUpdateFeature,
   handleTickMaintenance,
   handleRefreshState,
+  handleRecordRun,
 } from "./handlers.js";
 
 import {
@@ -60,9 +61,29 @@ import {
   handleGenerateToolPrompt,
 } from "./tool-factory.js";
 
+import toolStratification from "./tool-stratification.json" with { type: "json" };
+
+// ─── Types ───────────────────────────────────────────────────────
+
+export type ToolCategory = "core" | "observability" | "metacognition" | "infra";
+type HandlerFn = (params: any) => Promise<unknown>;
+
+interface ToolDefinition {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  outputSchema: Record<string, unknown>;
+}
+
+interface ToolRegistryEntry {
+  definition: ToolDefinition;
+  handler: HandlerFn;
+  category: ToolCategory;
+}
+
 // ─── Tool definitions (JSON Schema) ─────────────────────────────
 
-export const TOOLS = [
+const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: "sdd_get_state",
     description:
@@ -1377,13 +1398,43 @@ export const TOOLS = [
       },
     },
   },
+
+  // ─── sdd_record_run ──────────────────────────────────────────────
+  {
+    name: "sdd_record_run",
+    description:
+      "Record a completed pipeline run. Increments the project-level run counter and appends to run_history. " +
+      "Call this at the end of every pipeline run (fast path or full pipeline).",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        project_path: { type: "string", description: "Absolute path to the project root" },
+        feature: { type: "string", description: "Name of the feature that completed" },
+        path: { type: "string", enum: ["express", "light", "standard", "full"], description: "Execution mode used" },
+        duration_ms: { type: "number", description: "Total pipeline duration in milliseconds" },
+        files_touched: { type: "array", items: { type: "string" }, description: "Files created or modified during the run" },
+        score: { type: "number", description: "Final quality score (optional)" },
+      },
+      required: ["project_path", "feature", "path", "duration_ms", "files_touched"],
+    },
+    outputSchema: {
+      type: "object" as const,
+      description: "Run recording confirmation with updated counter",
+      properties: {
+        recorded: { type: "boolean", description: "Always true on success" },
+        run_id: { type: "number", description: "Sequential run ID assigned" },
+        run_counter: { type: "number", description: "Total completed runs for this project" },
+        feature: { type: "string", description: "Feature name" },
+        path: { type: "string", description: "Execution mode used" },
+        duration_ms: { type: "number", description: "Pipeline duration" },
+      },
+    },
+  },
 ];
 
-// ─── Tool dispatcher ─────────────────────────────────────────────
+// ─── Handler map (single source of truth for name → handler) ────
 
-type HandlerFn = (params: any) => Promise<unknown>;
-
-export const HANDLER_MAP: Record<string, HandlerFn> = {
+const HANDLER_LOOKUP: Record<string, HandlerFn> = {
   sdd_get_state: handleGetState,
   sdd_refresh_state: handleRefreshState,
   sdd_transition: handleTransition,
@@ -1397,35 +1448,88 @@ export const HANDLER_MAP: Record<string, HandlerFn> = {
   sdd_append_signal: handleAppendSignal,
   sdd_update_task: handleUpdateTask,
   sdd_update_feature: handleUpdateFeature,
-  // Observability Layer (Phase 1)
-  sdd_emit_metrics:    handleEmitMetrics,
+  sdd_emit_metrics: handleEmitMetrics,
   sdd_get_run_summary: handleGetRunSummary,
-  sdd_get_analytics:       handleGetAnalytics,
-  sdd_estimate_cost:       handleEstimateCost,
-  sdd_compare_runs:        handleCompareRuns,
-  sdd_detect_anomaly:      handleDetectAnomaly,
-  sdd_get_manifest:        handleGetManifest,
-  // Metacognition Layer (Phase 2+)
-  sdd_compute_score:        handleComputeScore,
-  sdd_get_patterns:         handleGetPatterns,
-  sdd_propose_pattern:      handleProposePattern,
-  sdd_promote_pattern:      handlePromotePattern,
-  sdd_propose_experiment:   handleProposeExperiment,
-  sdd_evaluate_experiment:  handleEvaluateExperiment,
-  sdd_propose_evolution:    handleProposeEvolution,
-  sdd_approve_evolution:    handleApproveEvolution,
-  sdd_abandon_experiment:   handleAbandonExperiment,
-  sdd_update_pattern:       handleUpdatePattern,
-  sdd_get_strategy:         handleGetStrategy,
-  sdd_run_retro:            handleRunRetro,
-  sdd_phase_confidence:     handlePhaseConfidence,
-  // Fusion tools
-  sdd_tick_maintenance:        handleTickMaintenance,
-  // Tool Factory (Self-Evolution)
-  sdd_propose_tool:          handleProposeTool,
-  sdd_review_tool_proposal:  handleReviewToolProposal,
-  sdd_generate_tool_prompt:  handleGenerateToolPrompt,
+  sdd_get_analytics: handleGetAnalytics,
+  sdd_estimate_cost: handleEstimateCost,
+  sdd_compare_runs: handleCompareRuns,
+  sdd_detect_anomaly: handleDetectAnomaly,
+  sdd_get_manifest: handleGetManifest,
+  sdd_compute_score: handleComputeScore,
+  sdd_get_patterns: handleGetPatterns,
+  sdd_propose_pattern: handleProposePattern,
+  sdd_promote_pattern: handlePromotePattern,
+  sdd_propose_experiment: handleProposeExperiment,
+  sdd_evaluate_experiment: handleEvaluateExperiment,
+  sdd_propose_evolution: handleProposeEvolution,
+  sdd_approve_evolution: handleApproveEvolution,
+  sdd_abandon_experiment: handleAbandonExperiment,
+  sdd_update_pattern: handleUpdatePattern,
+  sdd_get_strategy: handleGetStrategy,
+  sdd_run_retro: handleRunRetro,
+  sdd_phase_confidence: handlePhaseConfidence,
+  sdd_tick_maintenance: handleTickMaintenance,
+  sdd_record_run: handleRecordRun,
+  sdd_propose_tool: handleProposeTool,
+  sdd_review_tool_proposal: handleReviewToolProposal,
+  sdd_generate_tool_prompt: handleGenerateToolPrompt,
 };
+
+// ─── Tool Registry (unified single source of truth) ─────────────
+// Adding a new tool? Add it in ONE place: TOOL_DEFINITIONS above + HANDLER_LOOKUP above.
+// Category is resolved from tool-stratification.json automatically.
+
+function resolveCategory(toolName: string): ToolCategory {
+  for (const [cat, names] of Object.entries(toolStratification)) {
+    if ((names as string[]).includes(toolName)) return cat as ToolCategory;
+  }
+  return "infra"; // default: unlisted tools require explicit request
+}
+
+export const TOOL_REGISTRY: ToolRegistryEntry[] = TOOL_DEFINITIONS.map(def => ({
+  definition: def,
+  handler: HANDLER_LOOKUP[def.name],
+  category: resolveCategory(def.name),
+}));
+
+// ─── Derived exports (backward compatibility) ───────────────────
+// TOOLS: flat array of definitions for MCP ListTools and tool-factory.ts
+// HANDLER_MAP: name → handler for MCP CallTool dispatch
+
+export const TOOLS = TOOL_REGISTRY.map(e => e.definition);
+export const HANDLER_MAP: Record<string, HandlerFn> = Object.fromEntries(
+  TOOL_REGISTRY.map(e => [e.definition.name, e.handler]),
+);
+
+// ─── Tool categories (exported for orchestrator gating) ─────────
+// Categories from tool-stratification.json:
+//   core:          always available
+//   observability: available from run 1
+//   metacognition: available after 5 runs (handlers also self-gate)
+//   infra:         available only when explicitly requested
+
+export const TOOL_CATEGORIES: Record<ToolCategory, string[]> = toolStratification as Record<ToolCategory, string[]>;
+
+/**
+ * Get tools available for a given run counter.
+ * - runCounter < 5: core + observability
+ * - runCounter >= 5: core + observability + metacognition
+ * - infra: always excluded (available only on explicit request)
+ *
+ * Design note: MCP ListTools has no project context, so we can't read run_counter
+ * at list time. This function is exported for the orchestrator (SKILL.md) to filter
+ * tools by category based on the project's run_counter. The MCP ListTools handler
+ * returns ALL tools, but metacognition handlers self-gate on run_counter < 5 as
+ * an additional safety net.
+ */
+export function getAvailableTools(runCounter: number): ToolDefinition[] {
+  const allowedCategories = new Set<ToolCategory>(["core", "observability"]);
+  if (runCounter >= 5) allowedCategories.add("metacognition");
+
+  return TOOL_REGISTRY
+    .filter(e => allowedCategories.has(e.category))
+    .map(e => e.definition);
+}
 
 // ─── Server setup ────────────────────────────────────────────────
 
@@ -1434,6 +1538,9 @@ const server = new Server(
   { capabilities: { tools: {} } },
 );
 
+// ListTools: returns all tools. Metacognition tools self-gate on run_counter < 5.
+// The orchestrator can also use getAvailableTools() + TOOL_CATEGORIES to filter
+// at the routing layer, but MCP ListTools has no project context to do it here.
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: TOOLS,
 }));

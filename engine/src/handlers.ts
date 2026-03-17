@@ -8,19 +8,14 @@ import { execSync } from "node:child_process";
 import { homedir } from "node:os";
 import { StateManager, AGENT_PERMISSIONS } from "./state.js";
 import { MemoryManager, sanitizeMemoryContent, validateExtractionFilter, consolidateEntry } from "./memory.js";
-import type { AgentId, FeatureState, PipelineContracts } from "./types.js";
+import type { AgentId, FeatureState, PipelineContracts, RunHistoryEntry } from "./types.js";
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
 import { fileExists, atomicAppendJSONL } from "./utils.js";
 
-// ─── Verbosity types ────────────────────────────────────────────
-export type Verbosity = "minimal" | "standard" | "full";
-
-function resolveVerbosity(v?: string): Verbosity {
-  if (v === "minimal" || v === "standard" || v === "full") return v;
-  return "full";
-}
+// ─── Verbosity (shared utility) ─────────────────────────────────
+import { resolveVerbosity, type Verbosity } from "./verbosity.js";
 
 // ─── Load contracts.json at startup ──────────────────────────────
 
@@ -166,6 +161,7 @@ export async function handleGetState(params: {
       active_feature: state.active_feature,
       feature_count: Object.keys(state.features).length,
       features_summary: Object.entries(state.features).map(([id, f]) => ({ id, state: f.state })),
+      run_counter: state.run_counter,
     };
   }
   if (v === "standard") {
@@ -173,6 +169,8 @@ export async function handleGetState(params: {
       version: state.version,
       project: state.project,
       active_feature: state.active_feature,
+      run_counter: state.run_counter,
+      run_history: state.run_history,
       features_summary: Object.entries(state.features).map(([id, f]) => ({
         id,
         state: f.state,
@@ -300,12 +298,12 @@ export async function handleEvaluateGate(params: {
         // Check if artifact was provided
         if (params.artifacts[fileName]) {
           const exists = await fileExists(resolve(params.project_path, params.artifacts[fileName]));
-          checks.push({ name: checkDesc, passed: exists, detail: exists ? `File found: ${params.artifacts[fileName]}` : `File not found: ${params.artifacts[fileName]}` });
+          checks.push({ name: checkDesc, passed: exists, detail: exists ? `File found: ${params.artifacts[fileName]}` : `[GATE: ${params.phase_id}] Expected: ${fileName} to exist at ${params.artifacts[fileName]}. Found: file does not exist. Fix: Ensure the ${params.phase_id} phase agent creates ${fileName} before the gate runs.` });
         } else {
           // Try default path
           const defaultPath = resolve(params.project_path, "specs", params.feature_id, fileName);
           const exists = await fileExists(defaultPath);
-          checks.push({ name: checkDesc, passed: exists, detail: exists ? `File found at default path` : `File not found at specs/${params.feature_id}/${fileName}` });
+          checks.push({ name: checkDesc, passed: exists, detail: exists ? `File found at default path` : `[GATE: ${params.phase_id}] Expected: ${fileName} at specs/${params.feature_id}/${fileName}. Found: file does not exist at default path. Fix: Ensure the ${params.phase_id} phase agent creates ${fileName}, or pass its location in the artifacts parameter.` });
         }
         continue;
       }
@@ -331,12 +329,12 @@ export async function handleEvaluateGate(params: {
             const nextHeader = /^## /m.exec(rest);
             const body = (nextHeader ? rest.slice(0, nextHeader.index) : rest).trim();
             const passed = body.length > 0;
-            checks.push({ name: checkDesc, passed, detail: passed ? `Section "${section}" has content (${body.length} chars)` : `Section "${section}" is empty` });
+            checks.push({ name: checkDesc, passed, detail: passed ? `Section "${section}" has content (${body.length} chars)` : `[GATE: ${params.phase_id}] Expected: "${section}" section with non-empty content. Found: "${section}" section exists but is empty. Fix: Add content to the "${section}" section in spec.md — it must contain at least one requirement or description.` });
           } else {
-            checks.push({ name: checkDesc, passed: false, detail: `Section "${section}" not found in spec` });
+            checks.push({ name: checkDesc, passed: false, detail: `[GATE: ${params.phase_id}] Expected: a "## ${section}" section in spec.md. Found: section not present in the file. Fix: Add a "## ${section}" header with relevant content to spec.md.` });
           }
         } catch {
-          checks.push({ name: checkDesc, passed: false, detail: `Could not read spec file` });
+          checks.push({ name: checkDesc, passed: false, detail: `[GATE: ${params.phase_id}] Expected: readable spec.md file. Found: could not read spec file (missing or permission error). Fix: Ensure spec.md exists and is readable at the expected path.` });
         }
         continue;
       }
@@ -351,10 +349,10 @@ export async function handleEvaluateGate(params: {
           JSON.parse(content);
           checks.push({ name: checkDesc, passed: true, detail: "Valid JSON" });
         } catch {
-          checks.push({ name: checkDesc, passed: false, detail: "Invalid JSON" });
+          checks.push({ name: checkDesc, passed: false, detail: `[GATE: ${params.phase_id}] Expected: valid JSON file. Found: JSON parse error. Fix: Validate the JSON artifact for syntax errors (missing commas, unclosed braces, trailing commas).` });
         }
       } else {
-        checks.push({ name: checkDesc, passed: false, detail: "No JSON artifact provided" });
+        checks.push({ name: checkDesc, passed: false, detail: `[GATE: ${params.phase_id}] Expected: a JSON artifact in the artifacts parameter. Found: no JSON file key in artifacts. Fix: Pass the JSON artifact path in the artifacts parameter (e.g., artifacts: { "config.json": "path/to/file.json" }).` });
       }
       continue;
     }
@@ -365,7 +363,7 @@ export async function handleEvaluateGate(params: {
       if (resultMatch) {
         const key = resultMatch[1];
         const has = params.artifacts[key] !== undefined;
-        checks.push({ name: checkDesc, passed: has, detail: has ? `${key} present in artifacts` : `${key} not found in artifacts` });
+        checks.push({ name: checkDesc, passed: has, detail: has ? `${key} present in artifacts` : `[GATE: ${params.phase_id}] Expected: ${key} to be emitted and present in artifacts. Found: ${key} not found in the artifacts parameter. Fix: Ensure the ${params.phase_id} phase agent emits ${key} and passes it via artifacts: { "${key}": "<value>" }.` });
         continue;
       }
     }
@@ -377,13 +375,15 @@ export async function handleEvaluateGate(params: {
         const feature = await sm.getFeature(params.feature_id);
         if (feature) {
           const pending = Object.entries(feature.tasks).filter(([, t]) => t.status !== "completed");
-          const passed = pending.length === 0 && Object.keys(feature.tasks).length > 0;
-          checks.push({ name: checkDesc, passed, detail: passed ? "All tasks completed" : `${pending.length} task(s) pending` });
+          const totalTasks = Object.keys(feature.tasks).length;
+          const passed = pending.length === 0 && totalTasks > 0;
+          const pendingIds = pending.map(([id]) => id).join(", ");
+          checks.push({ name: checkDesc, passed, detail: passed ? "All tasks completed" : `[GATE: ${params.phase_id}] Expected: all ${totalTasks} task(s) in state=completed. Found: ${pending.length} task(s) still pending (${pendingIds}). Fix: Complete the remaining tasks via sdd_update_task before re-evaluating the gate.` });
         } else {
-          checks.push({ name: checkDesc, passed: false, detail: "Feature not found" });
+          checks.push({ name: checkDesc, passed: false, detail: `[GATE: ${params.phase_id}] Expected: feature "${params.feature_id}" with registered tasks. Found: feature not found in state. Fix: Ensure the feature was initialized via sdd_transition before running the implement phase.` });
         }
       } catch {
-        checks.push({ name: checkDesc, passed: false, detail: "Could not read state" });
+        checks.push({ name: checkDesc, passed: false, detail: `[GATE: ${params.phase_id}] Expected: readable state.json. Found: could not read state file. Fix: Ensure .sdd/state.json exists and the project is initialized.` });
       }
       continue;
     }
@@ -400,7 +400,7 @@ export async function handleEvaluateGate(params: {
         checks.push({ name: checkDesc, passed: true, detail: "Tool alignment test passed" });
       } catch (err: any) {
         const output = (err.stdout ?? "") + (err.stderr ?? "");
-        checks.push({ name: checkDesc, passed: false, detail: `Tool alignment test failed:\n${output.slice(0, 2000)}` });
+        checks.push({ name: checkDesc, passed: false, detail: `[GATE: ${params.phase_id}] Expected: tool alignment test to pass (all registered tools match handler exports). Found: test failed. Fix: Run 'node --test test-alignment.mjs' locally to see failures and ensure index.ts TOOLS entries match handlers.ts exports.\n${output.slice(0, 1500)}` });
       }
       continue;
     }
@@ -1146,4 +1146,35 @@ export async function handleAppendSignal(params: {
   await atomicAppendJSONL(signalsPath, entry);
 
   return { appended: true, signal_id: signalId, in_state: stateResult.ok };
+}
+
+// ─── 14. sdd_record_run ──────────────────────────────────────────
+// Records a completed pipeline run in state.json's run_counter and run_history.
+
+export async function handleRecordRun(params: {
+  project_path: string;
+  feature: string;
+  path: "express" | "light" | "standard" | "full";
+  duration_ms: number;
+  files_touched: string[];
+  score?: number;
+}): Promise<unknown> {
+  const sm = new StateManager(params.project_path);
+  const entry: Omit<RunHistoryEntry, "run_id"> = {
+    feature: params.feature,
+    timestamp: new Date().toISOString(),
+    path: params.path,
+    duration_ms: params.duration_ms,
+    files_touched: params.files_touched,
+    score: params.score,
+  };
+  const recorded = await sm.recordRun(entry);
+  return {
+    recorded: true,
+    run_id: recorded.run_id,
+    run_counter: recorded.run_id,
+    feature: recorded.feature,
+    path: recorded.path,
+    duration_ms: recorded.duration_ms,
+  };
 }

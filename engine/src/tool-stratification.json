@@ -1,0 +1,48 @@
+{
+  "core": [
+    "sdd_get_state",
+    "sdd_transition",
+    "sdd_get_contract",
+    "sdd_evaluate_gate",
+    "sdd_classify_failure",
+    "sdd_delta_check",
+    "sdd_log_event",
+    "sdd_memory_read",
+    "sdd_memory_write",
+    "sdd_append_signal",
+    "sdd_update_task",
+    "sdd_update_feature",
+    "sdd_tick_maintenance",
+    "sdd_refresh_state",
+    "sdd_record_run"
+  ],
+  "observability": [
+    "sdd_emit_metrics",
+    "sdd_get_run_summary",
+    "sdd_get_analytics",
+    "sdd_estimate_cost",
+    "sdd_compare_runs",
+    "sdd_get_manifest"
+  ],
+  "metacognition": [
+    "sdd_compute_score",
+    "sdd_get_patterns",
+    "sdd_propose_pattern",
+    "sdd_promote_pattern",
+    "sdd_propose_experiment",
+    "sdd_evaluate_experiment",
+    "sdd_propose_evolution",
+    "sdd_approve_evolution",
+    "sdd_abandon_experiment",
+    "sdd_update_pattern",
+    "sdd_get_strategy",
+    "sdd_run_retro",
+    "sdd_phase_confidence"
+  ],
+  "infra": [
+    "sdd_propose_tool",
+    "sdd_review_tool_proposal",
+    "sdd_generate_tool_prompt",
+    "sdd_detect_anomaly"
+  ]
+}

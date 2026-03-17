@@ -474,6 +474,71 @@ ${conventionsContent.trim()}
     return { content: content.slice(0, startIdx) + "\n" + newBody + "\n\n" + content.slice(endIdx), modified: true };
   }
 
+  // ─── Pruning ──────────────────────────────────────────────────
+
+  /**
+   * Prune signals from a feature in state.json.
+   * Removes signals older than maxAge (default 7 days) and caps at maxEntries (default 100).
+   * Requires a StateManager instance — caller must pass read/write callbacks.
+   */
+  pruneSignals(
+    signals: Array<{ at: string; [key: string]: unknown }>,
+    featureName: string,
+    options: { maxAge?: number; maxEntries?: number } = {},
+  ): { pruned: number; remaining: number; signals: Array<{ at: string; [key: string]: unknown }> } {
+    const maxAge = options.maxAge ?? 7 * 24 * 60 * 60 * 1000; // 7 days in ms
+    const maxEntries = options.maxEntries ?? 100;
+    const now = Date.now();
+    const before = signals.length;
+
+    // Remove signals older than maxAge
+    let result = signals.filter(s => {
+      const signalTime = new Date(s.at).getTime();
+      return (now - signalTime) <= maxAge;
+    });
+
+    // If still over maxEntries, keep only the most recent
+    if (result.length > maxEntries) {
+      result = result.slice(-maxEntries);
+    }
+
+    const pruned = before - result.length;
+    if (pruned > 0) {
+      console.warn(`[SDD] Pruned ${pruned} signals from feature '${featureName}'`);
+    }
+    return { pruned, remaining: result.length, signals: result };
+  }
+
+  /**
+   * Prune memory entries (learned patterns, run history, etc.) by keeping only
+   * the most recent maxEntries per scope.
+   * Operates on the project memory file's Learned Patterns section.
+   */
+  pruneMemory(options: { maxEntries?: number } = {}): number {
+    const maxEntries = options.maxEntries ?? 100;
+    if (!existsSync(this.projectMemoryPath)) return 0;
+
+    const content = readFileSync(this.projectMemoryPath, "utf-8");
+    const section = this.extractSection(content, "Learned Patterns");
+    if (!section || section.startsWith("(no patterns")) return 0;
+
+    const blocks = section.split("\n\n").filter(b => b.trim());
+    if (blocks.length <= maxEntries) return 0;
+
+    const pruned = blocks.length - maxEntries;
+    const kept = blocks.slice(-maxEntries);
+
+    // Re-number surviving patterns
+    let idx = 1;
+    const renumbered = kept.map(block =>
+      block.replace(/<!-- PATTERN-\d+:/, `<!-- PATTERN-${String(idx++).padStart(3, "0")}:`),
+    ).join("\n\n");
+
+    writeFileSync(this.projectMemoryPath, this.replaceSection(content, "Learned Patterns", renumbered.trim()).content, "utf-8");
+    console.warn(`[SDD] Pruned ${pruned} memory entries from Learned Patterns`);
+    return pruned;
+  }
+
   // Ensure all expected sections exist in a memory file. Appends missing sections at the end.
   ensureProjectSections(): void {
     if (!existsSync(this.projectMemoryPath)) return;

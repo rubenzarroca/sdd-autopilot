@@ -17,7 +17,8 @@ export type FeatureState =
   | "reviewing"
   | "pr_created"
   | "merged"
-  | "escalated";        // any → escalated (hard stop, human required)
+  | "paused"            // recoverable pause — any non-terminal → paused, paused → draft
+  | "escalated";        // any → escalated (hard stop, human required) — only truly terminal state
 
 // ─── Agents ──────────────────────────────────────────────────────
 
@@ -41,12 +42,139 @@ export type SignalType =
   | "QUESTION"              // agent needs information from another agent (routed via orchestrator)
   | "BLOCKER";              // agent cannot proceed; requires orchestrator intervention
 
+// ─── Signal Payload Types (discriminated union) ─────────────────
+
+export interface CircuitBreakerPayload {
+  type: "CIRCUIT_BREAKER";
+  trigger: string;
+  threshold: number;
+  current: number;
+  feature: string;
+}
+
+export interface SpecGapPayload {
+  type: "SPEC_GAP";
+  gap_description: string;
+  affected_requirements: string[];
+}
+
+export interface StateResetPayload {
+  type: "STATE_RESET";
+  from_state: string;
+  reason: string;
+  timestamp: string;
+}
+
+export interface StatePausedPayload {
+  type: "STATE_PAUSED";
+  from_state: string;
+  reason: string;
+  timestamp: string;
+}
+
+export interface FixLoopPayload {
+  type: "FIX_LOOP";
+  attempt: number;
+  category: string;
+  description: string;
+}
+
+export interface DeltaCheckPayload {
+  type: "DELTA_CHECK";
+  before_score: number;
+  after_score: number;
+  delta: number;
+}
+
+export interface AttentionRequiredPayload {
+  type: "ATTENTION_REQUIRED";
+  message: string;
+  severity: string;
+  context?: string;
+}
+
+export interface PatternDetectedPayload {
+  type: "PATTERN_DETECTED";
+  pattern_description: string;
+  occurrences: number;
+  affected_phases?: string[];
+}
+
+export interface DependencyWarningPayload {
+  type: "DEPENDENCY_WARNING";
+  dependency: string;
+  issue: string;
+  impact?: string;
+}
+
+export interface ContextNotePayload {
+  type: "CONTEXT_NOTE";
+  message: string;
+  relevant_agents?: string[];
+}
+
+export interface MetaLearningHintPayload {
+  type: "META_LEARNING_HINT";
+  observation: string;
+  suggested_update?: string;
+  target?: string;
+}
+
+export interface QuestionPayload {
+  type: "QUESTION";
+  question: string;
+  context?: string;
+  urgency?: string;
+}
+
+export interface BlockerPayload {
+  type: "BLOCKER";
+  reason: string;
+  blocked_task?: string;
+  requires?: string;
+}
+
+export interface MemorySanitizationPayload {
+  type: "MEMORY_SANITIZATION";
+  warnings: string[];
+  content_preview: string;
+}
+
+export interface ExtractionFilterPayload {
+  type: "EXTRACTION_FILTER";
+  reason: string;
+  section: string;
+  content_preview: string;
+}
+
+export interface GenericSignalPayload {
+  [key: string]: unknown;
+}
+
+export type SignalPayload =
+  | CircuitBreakerPayload
+  | SpecGapPayload
+  | StateResetPayload
+  | StatePausedPayload
+  | FixLoopPayload
+  | DeltaCheckPayload
+  | AttentionRequiredPayload
+  | PatternDetectedPayload
+  | DependencyWarningPayload
+  | ContextNotePayload
+  | MetaLearningHintPayload
+  | QuestionPayload
+  | BlockerPayload
+  | MemorySanitizationPayload
+  | ExtractionFilterPayload
+  | GenericSignalPayload;
+
 export interface Signal {
   id: string;
   type: SignalType;
   from_agent: AgentId;
   at: string;              // ISO timestamp
-  payload: Record<string, unknown>;
+  payload: SignalPayload;
 }
 
 // ─── Transitions ─────────────────────────────────────────────────
@@ -90,6 +218,18 @@ export interface FeatureEntry {
   skip_worktree?: boolean;        // true when --skip-worktree flag is used
 }
 
+// ─── Run History (project-level, tracks completed pipeline runs) ──
+
+export interface RunHistoryEntry {
+  run_id: number;
+  feature: string;
+  timestamp: string;          // ISO
+  path: "express" | "light" | "standard" | "full";  // execution mode used
+  duration_ms: number;
+  files_touched: string[];
+  score?: number;
+}
+
 // ─── State root ──────────────────────────────────────────────────
 // allowed_transitions removed — governance lives in AGENT_PERMISSIONS (state.ts), not in data
 
@@ -99,6 +239,8 @@ export interface StateJson {
   initialized_at: string;
   active_feature: string | null;
   features: Record<string, FeatureEntry>;
+  run_counter: number;              // total completed pipeline runs across all features
+  run_history: RunHistoryEntry[];   // last N runs (bounded, default 20, FIFO)
 }
 
 // ─── Transition results ──────────────────────────────────────────

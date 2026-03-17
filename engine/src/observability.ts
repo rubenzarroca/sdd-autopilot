@@ -11,13 +11,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 import type { PhaseMetrics, RunSummary } from "./types.js";
 import { fileExists, parseJsonl, atomicWriteJSON, atomicAppendJSONL } from "./utils.js";
-
-// ─── Verbosity types ────────────────────────────────────────────
-type Verbosity = "minimal" | "standard" | "full";
-function resolveVerbosity(v?: string): Verbosity {
-  if (v === "minimal" || v === "standard" || v === "full") return v;
-  return "full";
-}
+import { resolveVerbosity } from "./verbosity.js";
 
 // Fix loop caps from contracts.json — used by inline threshold checks in run_summary
 const FIX_LOOP_CAPS: Record<string, number> = (() => {

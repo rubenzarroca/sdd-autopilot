@@ -2,7 +2,7 @@
 // Feature as business entity: transition machine + agent boundaries + typed signals
 // Governance lives here (executable), not in prompts (ignorable).
 
-import { readFile, mkdir } from "node:fs/promises";
+import { readFile, mkdir, stat } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { atomicWriteJSON } from "./utils.js";
@@ -15,6 +15,7 @@ import type {
   SignalType,
   TransitionResult,
   TransitionErrorCode,
+  RunHistoryEntry,
 } from "./types.js";
 
 // ─── Agent permissions (executable governance) ───────────────────
@@ -73,13 +74,31 @@ export const AGENT_PERMISSIONS: Record<AgentId, TransitionEdge[]> = {
     // PR phase: orchestrator handles inline (no subagent)
     { from: "pr_created",     to: "merged" },
     // any→escalated handled via isEscalation special-case in transition()
+    // ── Pause / Resume ──────────────────────────────────────────
+    // Any non-terminal state → paused (orchestrator only)
+    { from: "draft",          to: "paused" },
+    { from: "specified",      to: "paused" },
+    { from: "planned",        to: "paused" },
+    { from: "decomposed",     to: "paused" },
+    { from: "implementing",   to: "paused" },
+    { from: "blocked",        to: "paused" },
+    { from: "fix_loop",       to: "paused" },
+    { from: "fix_review",     to: "paused" },
+    { from: "awaiting_input", to: "paused" },
+    { from: "verifying",      to: "paused" },
+    { from: "reviewing",      to: "paused" },
+    { from: "pr_created",     to: "paused" },
+    // paused → draft (reset, orchestrator only)
+    { from: "paused",         to: "draft" },
   ],
 };
 
 // States that accept re-entry (self-transitions are no-ops on state field)
 const SELF_TRANSITION_STATES = new Set<FeatureState>(["implementing"]);
 
-// States that mark the feature as done (no active feature after)
+// States that mark the feature as done (no active feature after).
+// "escalated" is the only truly terminal state (no outbound transitions).
+// "merged" is terminal (feature complete). "paused" is NOT terminal — it's recoverable via reset.
 const TERMINAL_STATES = new Set<FeatureState>(["merged", "escalated"]);
 
 // ─── State manager ───────────────────────────────────────────────
@@ -87,6 +106,7 @@ const TERMINAL_STATES = new Set<FeatureState>(["merged", "escalated"]);
 export class StateManager {
   private statePath: string;
   private static cache = new Map<string, StateJson>();
+  private static lastMtime = new Map<string, number>();
 
   constructor(projectRoot: string) {
     this.statePath = join(projectRoot, ".sdd", "state.json");
@@ -95,12 +115,14 @@ export class StateManager {
   /** Clear the in-memory cache (for testing or refresh_state). */
   static clearCache(): void {
     StateManager.cache.clear();
+    StateManager.lastMtime.clear();
   }
 
   /** Invalidate cache for a specific project root (force next read to reload from disk). */
   static invalidate(projectRoot: string): void {
     const statePath = join(projectRoot, ".sdd", "state.json");
     StateManager.cache.delete(statePath);
+    StateManager.lastMtime.delete(statePath);
   }
 
   async exists(): Promise<boolean> {
@@ -113,13 +135,49 @@ export class StateManager {
   }
 
   async read(): Promise<StateJson> {
+    // mtime check: detect external modifications even when cache exists
     const cached = StateManager.cache.get(this.statePath);
     if (cached) {
-      return structuredClone(cached);
+      try {
+        const fileStat = await stat(this.statePath);
+        const fileMtime = fileStat.mtimeMs;
+        const knownMtime = StateManager.lastMtime.get(this.statePath);
+        if (knownMtime !== undefined && fileMtime > knownMtime) {
+          console.warn("[SDD] External state modification detected, reloading from disk");
+          StateManager.cache.delete(this.statePath);
+          // fall through to disk read
+        } else {
+          return structuredClone(cached);
+        }
+      } catch {
+        // stat failed — fall through to disk read
+        StateManager.cache.delete(this.statePath);
+      }
     }
-    const raw = await readFile(this.statePath, "utf-8");
-    const state = JSON.parse(raw) as StateJson;
+
+    let raw: string;
+    try {
+      raw = await readFile(this.statePath, "utf-8");
+    } catch (err) {
+      throw new Error(`[SDD] Failed to read state.json at ${this.statePath}: ${(err as Error).message}`);
+    }
+
+    let state: StateJson;
+    try {
+      state = JSON.parse(raw) as StateJson;
+    } catch (err) {
+      throw new Error(`[SDD] state.json is corrupted at ${this.statePath}. Run 'sdd --reset' to reinitialize. Parse error: ${(err as Error).message}`);
+    }
+
+    // Backfill run_counter/run_history for state files created before this field existed
+    if (state.run_counter === undefined) state.run_counter = 0;
+    if (state.run_history === undefined) state.run_history = [];
+
     StateManager.cache.set(this.statePath, structuredClone(state));
+    try {
+      const fileStat = await stat(this.statePath);
+      StateManager.lastMtime.set(this.statePath, fileStat.mtimeMs);
+    } catch { /* best-effort mtime tracking */ }
     return state;
   }
 
@@ -127,6 +185,10 @@ export class StateManager {
     await mkdir(dirname(this.statePath), { recursive: true });
     await atomicWriteJSON(this.statePath, state);
     StateManager.cache.set(this.statePath, structuredClone(state));
+    try {
+      const fileStat = await stat(this.statePath);
+      StateManager.lastMtime.set(this.statePath, fileStat.mtimeMs);
+    } catch { /* best-effort mtime tracking */ }
   }
 
   async init(projectName: string): Promise<StateJson> {
@@ -136,9 +198,81 @@ export class StateManager {
       initialized_at: new Date().toISOString(),
       active_feature: null,
       features: {},
+      run_counter: 0,
+      run_history: [],
     };
     await this.write(state);
     return state;
+  }
+
+  // ─── Run counter ──────────────────────────────────────────────
+
+  /** Record a completed pipeline run. Increments counter, appends to history (bounded FIFO, max 20). */
+  async recordRun(entry: Omit<RunHistoryEntry, "run_id">): Promise<RunHistoryEntry> {
+    const state = await this.read();
+    state.run_counter += 1;
+    const fullEntry: RunHistoryEntry = { run_id: state.run_counter, ...entry };
+    state.run_history.push(fullEntry);
+    // FIFO bound: keep only last 20 entries
+    if (state.run_history.length > 20) {
+      state.run_history = state.run_history.slice(-20);
+    }
+    await this.write(state);
+    return fullEntry;
+  }
+
+  /** Returns the current run counter (total completed pipeline runs). */
+  async getRunCounter(): Promise<number> {
+    const state = await this.read();
+    return state.run_counter;
+  }
+
+  // ─── Pause / Reset ────────────────────────────────────────────
+
+  /** Pause a feature: sets state to "paused" and emits a STATE_PAUSED signal. */
+  async pauseFeature(featureName: string, reason: string): Promise<void> {
+    const state = await this.read();
+    const feature = state.features[featureName];
+    if (!feature) throw new Error(`Feature "${featureName}" not found`);
+    const fromState = feature.state;
+    feature.state = "paused";
+    const now = new Date().toISOString();
+    feature.transitions.push({ from: fromState, to: "paused", at: now, command: "pause", agent: "orchestrator" });
+    feature.signals.push({
+      id: randomUUID(),
+      type: "CONTEXT_NOTE",
+      from_agent: "orchestrator",
+      at: now,
+      payload: { type: "STATE_PAUSED", from_state: fromState, reason, timestamp: now },
+    });
+    console.warn(`[SDD] Feature '${featureName}' paused. Previous state: ${fromState}. Reason: ${reason}`);
+    await this.write(state);
+  }
+
+  /** Reset a feature to draft: clears counters, emits STATE_RESET signal. */
+  async resetFeature(featureName: string, reason: string): Promise<void> {
+    const state = await this.read();
+    const feature = state.features[featureName];
+    if (!feature) throw new Error(`Feature "${featureName}" not found`);
+    const fromState = feature.state;
+    feature.state = "draft";
+    feature.fix_loop_attempts = 0;
+    feature.fix_review_attempts = 0;
+    feature.verification_attempts = 0;
+    feature.review_attempts = 0;
+    delete feature.blocked_reason;
+    delete feature.escalation_reason;
+    const now = new Date().toISOString();
+    feature.transitions.push({ from: fromState, to: "draft", at: now, command: "reset", agent: "orchestrator" });
+    feature.signals.push({
+      id: randomUUID(),
+      type: "CONTEXT_NOTE",
+      from_agent: "orchestrator",
+      at: now,
+      payload: { type: "STATE_RESET", from_state: fromState, reason, timestamp: now },
+    });
+    console.warn(`[SDD] Feature '${featureName}' reset to draft. Previous state: ${fromState}. Reason: ${reason}`);
+    await this.write(state);
   }
 
   async createFeature(featureName: string): Promise<void> {
@@ -293,6 +427,12 @@ export class StateManager {
 
     if (!feature) {
       return { ok: false, reason: `Feature "${featureName}" not found` };
+    }
+
+    // Hard cap: auto-prune oldest 50 signals when array exceeds 200
+    if (feature.signals.length >= 200) {
+      console.warn(`[SDD] Signal array exceeded 200 entries, auto-pruning oldest 50`);
+      feature.signals = feature.signals.slice(50);
     }
 
     const signal: Signal = {

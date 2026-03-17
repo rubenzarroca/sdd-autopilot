@@ -15,12 +15,12 @@
     "standard": {
       "trigger": "complexity == medium",
       "phases": ["triage", "specify", "plan", "tasks", "implement", "verify", "review", "pr"],
-      "notes": "All phases except opus-coach pair review."
+      "notes": "All phases. Default review via /code-review plugin."
     },
     "full": {
       "trigger": "complexity == high OR complexity == critical",
       "phases": ["triage", "specify", "plan", "tasks", "implement", "verify", "review", "pr"],
-      "notes": "All phases including pair review. Consider suggesting --pair-review for opus-coach."
+      "notes": "All phases. If --opus-review flag is set, review phase uses opus-coach instead of default /code-review plugin."
     }
   },
   "contracts": {
@@ -62,7 +62,6 @@
         "validator": "haiku-validator",
         "checks": ["spec.md created", "requirements section non-empty", "every requirement contains must or shall"]
       },
-      "pair_review": { "enabled": true, "opt_in": true, "requires_flag": "--pair-review", "max_corrections": 1 },
       "failure_modes": ["NEEDS_CLARIFICATION", "SCOPE_TOO_LARGE"],
       "next": "plan"
     },
@@ -132,7 +131,6 @@
         "message_budget": 3,
         "agents_can_query": ["spec-generator"]
       },
-      "pair_review": { "enabled": true, "opt_in": true, "requires_flag": "--pair-review", "max_corrections": 1 },
       "failure_modes": ["TASK_BLOCKED", "DEPENDENCY_MISSING"],
       "next": "verify"
     },
@@ -162,7 +160,6 @@
         "categories": ["implementation_bug", "spec_gap", "infra_issue"],
         "delta_check": true
       },
-      "pair_review": { "enabled": true, "opt_in": true, "requires_flag": "--pair-review", "max_corrections": 1 },
       "failure_modes": ["TESTS_FAILING", "COVERAGE_INSUFFICIENT", "SPEC_GAP", "ESCALATE"],
       "next": "review"
     },
@@ -196,6 +193,7 @@
         "max_attempts": 2,
         "delta_check": true
       },
+      "opus_review": { "opt_in": true, "flag": "--opus-review" },
       "failure_modes": ["CRITICAL_ISSUES", "ESCALATE"],
       "next": "pr"
     },

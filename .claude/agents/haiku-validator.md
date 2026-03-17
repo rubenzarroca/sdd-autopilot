@@ -38,3 +38,8 @@ Verify that a pipeline stage's output satisfies its required checks. Fast and pr
 - No explanation outside VALIDATOR_RESULT block
 - One read round per artifact is sufficient
 - Concrete gaps only -- no theoretical issues
+
+## Output Constraints
+- When called with verbosity=minimal: respond with ONLY the structured output (JSON/contract markers). No explanations, no reasoning, no suggestions.
+- When called with verbosity=standard: structured output + 1-2 sentence summary.
+- When called with verbosity=full (default): full output with reasoning.

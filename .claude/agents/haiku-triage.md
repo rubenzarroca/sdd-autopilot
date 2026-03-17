@@ -42,6 +42,11 @@ Ambiguous -> round up. Default (empty/unreadable): `{"feature_type":"other","com
 
 This agent is a sensor, not a controller. Classify and return. The orchestrator decides routing.
 
+## Output Constraints
+- When called with verbosity=minimal: respond with ONLY the structured output (JSON/contract markers). No explanations, no reasoning, no suggestions.
+- When called with verbosity=standard: structured output + 1-2 sentence summary.
+- When called with verbosity=full (default): full output with reasoning.
+
 ## Telemetry (mandatory)
 
 Your FINAL line of output — after all classification and signals — MUST be:

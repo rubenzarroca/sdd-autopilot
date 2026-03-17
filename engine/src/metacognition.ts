@@ -7,12 +7,39 @@ import { readFile, mkdir } from "node:fs/promises";
 import { resolve, join } from "node:path";
 import type { RunSummary, ScoreWeights, CompositeScore, ExploitationPattern, Experiment, PipelineEvolution, PhaseMetrics } from "./types.js";
 import { fileExists, parseJsonl, atomicWriteJSON } from "./utils.js";
+import { resolveVerbosity } from "./verbosity.js";
+import { StateManager } from "./state.js";
 
-// ─── Verbosity types ────────────────────────────────────────────
-type Verbosity = "minimal" | "standard" | "full";
-function resolveVerbosity(v?: string): Verbosity {
-  if (v === "minimal" || v === "standard" || v === "full") return v;
-  return "full";
+// ─── Metacognition gating ────────────────────────────────────────
+// Safety net: metacognition tools self-gate when run_counter < 5.
+// Even if the orchestrator doesn't filter, these tools return inactive status.
+const METACOGNITION_MIN_RUNS = 5;
+
+async function checkMetacognitionGate(projectPath: string): Promise<{ gated: true; response: unknown } | { gated: false }> {
+  try {
+    const sm = new StateManager(projectPath);
+    const state = await sm.read();
+    const runCounter = state.run_counter ?? 0;
+    if (runCounter < METACOGNITION_MIN_RUNS) {
+      return {
+        gated: true,
+        response: {
+          status: "inactive",
+          message: `Metacognition requires ${METACOGNITION_MIN_RUNS}+ completed runs. Current: ${runCounter}. Data is being collected but analysis is not yet available.`,
+        },
+      };
+    }
+  } catch {
+    // State not found — project not initialized yet, gate it
+    return {
+      gated: true,
+      response: {
+        status: "inactive",
+        message: `Metacognition requires ${METACOGNITION_MIN_RUNS}+ completed runs. State not available. Data is being collected but analysis is not yet available.`,
+      },
+    };
+  }
+  return { gated: false };
 }
 
 // ─── Generic metacognition JSON helpers ──────────────────────────
@@ -231,6 +258,9 @@ export async function handleComputeScore(params: {
   review_decision?: "approve" | "request_changes" | "reject" | null;
   verbosity?: string;
 }): Promise<unknown> {
+  const gate = await checkMetacognitionGate(params.project_path);
+  if (gate.gated) return gate.response;
+
   // Validate review_decision if explicitly provided
   if (params.review_decision !== undefined && params.review_decision !== null) {
     if (!(VALID_REVIEW_DECISIONS as readonly string[]).includes(params.review_decision)) {
@@ -421,6 +451,9 @@ export async function handleGetPatterns(params: {
   complexity?:   string;
   verbosity?:    string;
 }): Promise<unknown> {
+  const gate = await checkMetacognitionGate(params.project_path);
+  if (gate.gated) return gate.response;
+
   const all = await readPatterns(params.project_path);
   const statusFilter = params.status ?? "active";
 
@@ -497,6 +530,9 @@ export async function handleProposePattern(params: {
   min_runs?:        number;
   ttl?:             number;
 }): Promise<unknown> {
+  const gate = await checkMetacognitionGate(params.project_path);
+  if (gate.gated) return gate.response;
+
   const all = await readPatterns(params.project_path);
 
   // Reject if pattern_id already exists
@@ -534,6 +570,9 @@ export async function handlePromotePattern(params: {
   project_path: string;
   pattern_id:   string;
 }): Promise<unknown> {
+  const gate = await checkMetacognitionGate(params.project_path);
+  if (gate.gated) return gate.response;
+
   const all = await readPatterns(params.project_path);
   const idx = all.findIndex(p => p.pattern_id === params.pattern_id);
 
@@ -597,6 +636,9 @@ export async function handleProposeExperiment(params: {
   expected_impact: string;
   risk_level:      Experiment["risk_level"];
 }): Promise<unknown> {
+  const gate = await checkMetacognitionGate(params.project_path);
+  if (gate.gated) return gate.response;
+
   const all = await readExperiments(params.project_path);
 
   // Only one experiment can be proposed or running at a time
@@ -640,6 +682,9 @@ export async function handleEvaluateExperiment(params: {
   result_score:   number;
   baseline_score: number;
 }): Promise<unknown> {
+  const gate = await checkMetacognitionGate(params.project_path);
+  if (gate.gated) return gate.response;
+
   const all = await readExperiments(params.project_path);
   const idx = all.findIndex(e => e.experiment_id === params.experiment_id);
 
@@ -710,6 +755,9 @@ export async function handleProposeEvolution(params: {
   supporting_data: Record<string, unknown>;
   impact:          PipelineEvolution["impact"];
 }): Promise<unknown> {
+  const gate = await checkMetacognitionGate(params.project_path);
+  if (gate.gated) return gate.response;
+
   const all = await readEvolutions(params.project_path);
 
   if (all.some(e => e.evolution_id === params.evolution_id)) {
@@ -813,6 +861,9 @@ export async function handleApproveEvolution(params: {
   decision:     "approve" | "reject";
   reason?:      string;
 }): Promise<unknown> {
+  const gate = await checkMetacognitionGate(params.project_path);
+  if (gate.gated) return gate.response;
+
   const all = await readEvolutions(params.project_path);
   const idx = all.findIndex(e => e.evolution_id === params.evolution_id);
 
@@ -894,6 +945,9 @@ export async function handleAbandonExperiment(params: {
   experiment_id: string;
   reason:        string;
 }): Promise<unknown> {
+  const gate = await checkMetacognitionGate(params.project_path);
+  if (gate.gated) return gate.response;
+
   const all = await readExperiments(params.project_path);
   const idx = all.findIndex(e => e.experiment_id === params.experiment_id);
 
@@ -925,6 +979,9 @@ export async function handleUpdatePattern(params: {
   confidence?:  number;
   outcome?:     "success" | "failure";
 }): Promise<unknown> {
+  const gate = await checkMetacognitionGate(params.project_path);
+  if (gate.gated) return gate.response;
+
   const all = await readPatterns(params.project_path);
   const idx = all.findIndex(p => p.pattern_id === params.pattern_id);
 
@@ -980,6 +1037,9 @@ export async function handleGetStrategy(params: {
   complexity:   string;
   verbosity?:   string;
 }): Promise<unknown> {
+  const gate = await checkMetacognitionGate(params.project_path);
+  if (gate.gated) return gate.response;
+
   // Read active patterns matching this feature context
   const allPatterns = await readPatterns(params.project_path);
   const applicable = allPatterns.filter(p => {
@@ -1113,6 +1173,9 @@ export async function handleRunRetro(params: {
   feature_id:       string;
   expected_outcome?: string;
 }): Promise<unknown> {
+  const gate = await checkMetacognitionGate(params.project_path);
+  if (gate.gated) return gate.response;
+
   const summaryPath = resolve(params.project_path, ".sdd", "runs", params.feature_id, "summary.json");
   if (!await fileExists(summaryPath)) {
     return { error: `No summary.json found for feature "${params.feature_id}". Call sdd_get_run_summary first.` };
@@ -1249,6 +1312,9 @@ export async function handlePhaseConfidence(params: {
   reasoning:    string;
   factors?:     Record<string, number>;
 }): Promise<unknown> {
+  const gate = await checkMetacognitionGate(params.project_path);
+  if (gate.gated) return gate.response;
+
   if (params.confidence < 0 || params.confidence > 1) {
     return { error: `Confidence must be between 0.0 and 1.0, got ${params.confidence}` };
   }

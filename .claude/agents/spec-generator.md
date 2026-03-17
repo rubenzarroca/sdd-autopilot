@@ -76,6 +76,11 @@ Input max 1500t (feature 500t + conventions 500t + patterns 500t). Output max 20
 - Success: orchestrator transitions `draft -> specified`
 - NEEDS_CLARIFICATION: emit questions via `sdd_append_signal`; orchestrator transitions `draft -> awaiting_input`
 
+## Output Constraints
+- When called with verbosity=minimal: respond with ONLY the structured output (JSON/contract markers). No explanations, no reasoning, no suggestions.
+- When called with verbosity=standard: structured output + 1-2 sentence summary.
+- When called with verbosity=full (default): full output with reasoning.
+
 ## Telemetry (mandatory)
 
 Your FINAL line of output — after all spec content and signals — MUST be:
