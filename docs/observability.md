@@ -80,7 +80,7 @@ Subagent breadcrumbs are recorded via `sdd_log_event` with `event_type='decision
 
 ## Anomaly Detection
 
-Z-score anomaly detection (`sdd_detect_anomaly`) catches regressions automatically by comparing current metrics against historical distribution. Threshold alerts are included inline in `sdd_get_run_summary`.
+Z-score anomaly detection (`sdd_detect_anomaly`, infra category) catches regressions automatically by comparing current metrics against historical distribution. Threshold alerts are included inline in `sdd_get_run_summary`.
 
 ## Response Verbosity
 

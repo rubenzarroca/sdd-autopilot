@@ -37,7 +37,7 @@ SDD Autopilot exposes 38 MCP tools organized into four categories. All tools are
 | `sdd_get_analytics` | Cross-run analytics: score trends, high-variance phases, avg duration by phase |
 | `sdd_estimate_cost` | Estimate cost in USD from token consumption |
 | `sdd_compare_runs` | Compare two pipeline runs side by side |
-| `sdd_detect_anomaly` | Z-score anomaly detection vs historical distribution |
+| `sdd_get_manifest` | Get SHA-256 hash of tool definitions for version drift detection |
 
 ## Metacognition (13 tools)
 
@@ -61,7 +61,7 @@ SDD Autopilot exposes 38 MCP tools organized into four categories. All tools are
 
 | Tool | Purpose |
 |------|---------|
-| `sdd_get_manifest` | Get SHA-256 hash of tool definitions for version drift detection |
 | `sdd_propose_tool` | Propose a new MCP tool (self-evolution: agent detects a missing capability) |
 | `sdd_review_tool_proposal` | Review a tool proposal for overlap, coherence, and necessity |
 | `sdd_generate_tool_prompt` | Generate implementation prompt for a validated tool proposal |
+| `sdd_detect_anomaly` | Z-score anomaly detection vs historical distribution |

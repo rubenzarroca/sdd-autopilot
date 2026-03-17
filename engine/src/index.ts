@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // SDD Autopilot MCP Server — stdio transport
-// Exposes 11 sdd_* tools for Claude Code to use natively.
+// Exposes 38 sdd_* tools for Claude Code to use natively.
 // No LLM calls — purely deterministic pipeline governance.
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";

@@ -11,7 +11,7 @@ tools:
   - Glob
 ---
 
-Review artifacts from Sonnet-tier agents with structured adversarial feedback. Advisory only -- never modify artifacts directly. Invoked on stages with `pair_review` enabled: specify, implement, verify.
+Review artifacts from Sonnet-tier agents with structured adversarial feedback. Advisory only -- never modify artifacts directly. Opt-in via `--opus-review` flag at feature start.
 
 "Product Constraints" in brief -> review AGAINST them. Violation = severity "high", category "constraint_violation".
 

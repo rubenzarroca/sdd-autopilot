@@ -56,7 +56,7 @@ async function writeMetacognitionJson<T>(projectPath: string, filename: string, 
   await atomicWriteJSON(resolve(dir, filename), data);
 }
 
-// ─── Default weights (tokens_available=false — see docs/observability-native-capabilities.md)
+// ─── Default weights (tokens_available=false)
 
 const DEFAULT_WEIGHTS: ScoreWeights = {
   quality_weight:            0.7,

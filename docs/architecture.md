@@ -85,13 +85,16 @@ USER (Claude Code CLI)
 +---------------------------------------------------------------+
 |             MCP SERVER  (engine/src/)  stdio transport          |
 |                                                                |
-|  index.ts -- handlers.ts -- state.ts -- memory.ts              |
-|  verbosity.ts -- tool-factory.ts                               |
-|  observability.ts -- metacognition.ts -- utils.ts              |
+|  index.ts ── TOOL_REGISTRY (single source of truth)            |
+|  handlers.ts -- state.ts -- memory.ts -- verbosity.ts          |
+|  observability.ts -- metacognition.ts -- tool-factory.ts       |
+|  types.ts -- utils.ts                                          |
 |                                                                |
 |  38 tools (see docs/tools.md for full reference)               |
+|  Categories: core(15) observability(6) metacognition(13) infra(4)|
 |  10 read tools support verbosity param (minimal/standard/full) |
-|  In-memory state cache with sdd_refresh_state escape hatch     |
+|  Metacognition gated behind run_counter >= 5                   |
+|  Write-through cache with mtime check + atomic writes          |
 +----------------------------+----------------------------------+
                              |  R/W
                              v
@@ -140,12 +143,19 @@ Transition graph enforced in code (`AGENT_PERMISSIONS` in `engine/src/state.ts`)
                         +------------------------------------------+
                         |  escalated  <-- orchestrator, any state   |
                         +------------------------------------------+
+                        +------------------------------------------+
+                        |  paused  <-- orchestrator, any non-terminal|
+                        |  paused --> draft (reset)                  |
+                        +------------------------------------------+
 
- draft --> specified --> planned --> decomposed --> implementing --> verifying --> reviewing --> pr_created
+ draft --> specified --> planned --> decomposed --> implementing --> verifying --> reviewing --> pr_created --> merged
                                         |               |               |
                                         v               v               v
                                      blocked          fix_loop       fix_review
                                   awaiting_input
+
+ Terminal states: merged, escalated
+ Recoverable: paused (reset to draft)
 ```
 
 ## File Structure
@@ -174,24 +184,33 @@ sdd-autopilot/
 |   +-- auto-status/SKILL.md # /sdd-auto:status
 |
 +-- docs/
+|   +-- architecture.md            # This file
+|   +-- memory.md                  # Memory intelligence docs
+|   +-- observability.md           # Observability & metacognition docs
+|   +-- tools.md                   # MCP tools reference
+|   +-- orchestrator/              # Runtime docs read by auto-run SKILL.md
 |   +-- examples/
-|       +-- health-check-endpoint/  # Real pipeline run
+|       +-- health-check-endpoint/ # Real pipeline run
 |
 +-- engine/                  # MCP server (TypeScript, stdio transport)
 |   +-- src/
-|   |   +-- index.ts         # Entry point -- 37 sdd_* tools registered
-|   |   +-- handlers.ts      # Core deterministic tool handlers
-|   |   +-- state.ts         # StateManager + AGENT_PERMISSIONS governance
-|   |   +-- memory.ts        # Two-layer memory (project + user scope)
-|   |   +-- tasks.ts         # parseTasks() + computeWaves()
-|   |   +-- observability.ts # PhaseMetrics . RunSummary . cross-run analytics
-|   |   +-- metacognition.ts # Scoring . patterns . experiments . evolution
-|   |   +-- types.ts         # Shared types (FindingSeverity, PhaseMetrics, ...)
-|   |   +-- utils.ts         # Shared utilities (fileExists, parseJsonl)
-|   |   +-- contracts.json   # Pipeline phase definitions (single source of truth)
+|   |   +-- index.ts                # Entry point -- TOOL_REGISTRY (38 sdd_* tools)
+|   |   +-- handlers.ts            # Core deterministic tool handlers (15)
+|   |   +-- state.ts               # StateManager + AGENT_PERMISSIONS governance
+|   |   +-- memory.ts              # Two-layer memory (project + user scope)
+|   |   +-- observability.ts       # PhaseMetrics . RunSummary . cross-run analytics (6+1)
+|   |   +-- metacognition.ts       # Scoring . patterns . experiments . evolution (13)
+|   |   +-- tool-factory.ts        # Self-evolution: propose/review/generate tools (3)
+|   |   +-- verbosity.ts           # Shared resolveVerbosity helper
+|   |   +-- types.ts               # Shared types (SignalPayload union, PhaseMetrics, ...)
+|   |   +-- utils.ts               # Shared utilities (fileExists, parseJsonl)
+|   |   +-- contracts.json         # Pipeline phase definitions (single source of truth)
+|   |   +-- tool-stratification.json  # Runtime category map (core/observability/metacognition/infra)
+|   |   +-- tools-manifest.json    # SHA-256 tool manifest for drift detection
 |   +-- tests/
-|   |   +-- e2e/             # Behavioral pipeline tests (23 tests)
-|   +-- test-e2e.mjs         # Mechanical tests (303+ assertions, no API calls)
+|   |   +-- e2e/             # Behavioral pipeline tests
+|   |   +-- fixtures/        # Test fixtures (sample-project)
+|   +-- test-e2e.mjs         # Mechanical tests (~1500 lines, no API calls)
 |   +-- scripts/
 |   |   +-- compute-tools-hash.mjs  # SHA-256 hash of tool definitions
 |   +-- tools-manifest.json  # Tool manifest for drift detection
