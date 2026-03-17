@@ -58,8 +58,9 @@ The pipeline selects an execution mode automatically based on feature complexity
 ## Links
 
 - [Architecture](docs/architecture.md) — pipeline phases, state machine, file structure
-- [Tools Reference](docs/tools.md) — all 37 MCP tools across 4 categories
-- [Non-Goals](docs/NON-GOALS.md) — what this project explicitly does not do
+- [Tools Reference](docs/tools.md) — all 38 MCP tools across 4 categories
+- [Observability & Metacognition](docs/observability.md) — learning loop, analytics, anomaly detection
+- [Memory Intelligence](docs/memory.md) — two-layer memory model
 - [Changelog](CHANGELOG.md)
 
 ## License
