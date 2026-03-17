@@ -86,10 +86,10 @@ USER (Claude Code CLI)
 |             MCP SERVER  (engine/src/)  stdio transport          |
 |                                                                |
 |  index.ts -- handlers.ts -- state.ts -- memory.ts              |
-|              tasks.ts ---- observability.ts -- metacognition.ts |
-|              utils.ts (fileExists . parseJsonl)                 |
+|  verbosity.ts -- tool-factory.ts                               |
+|  observability.ts -- metacognition.ts -- utils.ts              |
 |                                                                |
-|  37 tools (see docs/tools.md for full reference)               |
+|  38 tools (see docs/tools.md for full reference)               |
 |  10 read tools support verbosity param (minimal/standard/full) |
 |  In-memory state cache with sdd_refresh_state escape hatch     |
 +----------------------------+----------------------------------+

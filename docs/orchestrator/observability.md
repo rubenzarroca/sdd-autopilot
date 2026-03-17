@@ -47,7 +47,7 @@ LOG(event_type="phase_start", data={ agent: "{subagent-name}", model: "{model}" 
 ### 2. Subagent launch
 Immediately before invoking each subagent (Agent tool call):
 ```
-LOG(event_type="subagent_launch", data={ agent_name: "{subagent}", model: "{model}", mode: "primary" | "pair_review" | "gate_validation" })
+LOG(event_type="subagent_launch", data={ agent_name: "{subagent}", model: "{model}", mode: "primary" | "opus_review" | "gate_validation" })
 ```
 
 ### 3. State transition
@@ -62,10 +62,10 @@ After gate passes and transition is done:
 LOG(event_type="phase_complete", data={ gate_result: "passed" | "failed", duration_note: "N subagent calls" })
 ```
 
-### 5. Pair review
+### 5. Opus review (opt-in via --opus-review)
 After opus-coach returns, log the verdict before deciding whether to re-run:
 ```
-LOG(event_type="pair_review", data={ coach_verdict: "approve" | "revise", critical_count: N, major_count: N, minor_count: N, iteration: 1 | 2 })
+LOG(event_type="opus_review", data={ coach_verdict: "approve" | "revise", critical_count: N, major_count: N, minor_count: N, iteration: 1 | 2 })
 ```
 
 ### 6. Fix loop iteration
@@ -206,14 +206,14 @@ Call `sdd_phase_confidence` after each gate pass. Assign confidence based on how
 - Gate passed clean (first attempt, no fix loops): `confidence: 0.85`
 - Gate passed after 1 fix loop: `confidence: 0.65`
 - Gate passed after 2+ fix loops: `confidence: 0.45`
-- If pair review (opus-coach) required a revision: subtract `0.1` from the above value
+- If opus review (--opus-review flag) required a revision: subtract `0.1` from the above value
 - If the output is marked partial or incomplete: cap at `confidence: 0.5` max
 
 ```
 sdd_phase_confidence(project_path, feature_id, phase="{phase_name}",
   confidence={computed_value},
   reasoning="{why this confidence}",
-  factors={ gate_attempts: N, fix_loops: N, pair_review_revised: true|false, partial_output: true|false })
+  factors={ gate_attempts: N, fix_loops: N, opus_review_revised: true|false, partial_output: true|false })
 ```
 
 This persists to `.sdd/runs/{feature_id}/phase_confidence.json`. The data feeds into `sdd_get_run_summary` (which computes `avg_confidence` and inline threshold alerts).

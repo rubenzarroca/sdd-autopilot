@@ -1,6 +1,12 @@
 # Post-Pipeline Reference
 
-**ALWAYS run post-pipeline steps regardless of pipeline outcome** (success, failure, escalation, or any terminal state). The retro is especially valuable when things fail.
+**ALWAYS run post-pipeline steps regardless of pipeline outcome** (success, failure, escalation, or any terminal state). Data collection happens on EVERY run from run 1, but analysis depth is conditional on `run_counter`:
+
+- **Runs 1-3**: Steps 1-3 only (summary + score + thresholds). Print: `"📊 Run {N} complete. Score: {X}. (Retro activates at run 4)"`
+- **Runs 4-5**: Steps 1-6 (add retro). Print: `"📊 Run {N} complete. Score: {X}. Running retrospective..."`
+- **Runs 6+**: All steps (add anomaly detection + pattern analysis). Print: `"📊 Run {N} complete. Score: {X}. Running full post-pipeline analysis..."`
+
+Read `run_counter` from `sdd_get_state` response to determine which steps to execute.
 
 After PR creation (or after pipeline termination if it did not reach PR):
 
@@ -38,7 +44,7 @@ Extract `threshold_alerts` from the `sdd_get_run_summary` response (step 1).
 - If all alerts are `level: "warning"`: store for retro only.
 - If empty: proceed normally.
 
-## Step 4 — Detect anomaly
+## Step 4 — Detect anomaly (runs 6+ only)
 
 Call `sdd_detect_anomaly(project_path, feature_id)`. Computes z-scores for `total_duration_ms`, `first_pass_rate`, `pipeline_score`, and `avg_confidence` against the historical distribution (requires >= 5 prior runs).
 
@@ -58,9 +64,9 @@ Golden baseline is computed dynamically by `sdd_compute_score` — no separate t
 
 **Complexity weighting**: `trivial=0.6, low=0.8, medium=1.0, high=1.2, critical=1.4`.
 
-## Step 6 — Retro (MANDATORY)
+## Step 6 — Retro (runs 4+ only)
 
-**This step must execute even if the pipeline failed, was escalated, or was interrupted.**
+**When active (run_counter >= 4), this step must execute even if the pipeline failed, was escalated, or was interrupted.**
 
 Call `sdd_run_retro(project_path, feature_id, expected_outcome="clean_pass"|"minor_fixes")`.
 
@@ -80,7 +86,7 @@ If any tool proposals were created during this run (check `.sdd/proposals/` for 
 
 This step is optional and non-blocking.
 
-## Step 7 — Retro analysis (inline)
+## Step 7 — Retro analysis (runs 6+ only)
 
 Using the retro output from step 6, threshold alerts (step 3), and anomaly context (step 4):
 

@@ -57,6 +57,16 @@ At the start of each phase (after reading current feature state):
 4. Feed the full buffer as context to the inline retro analysis.
 5. Mark all META_LEARNING_HINT signals as processed after the retro completes.
 
+## Signal Bounds & Pruning
+
+Signals are append-only during a pipeline run, but bounded to prevent unbounded growth:
+
+- **Hard cap**: 200 signals per feature. When reached, the oldest 50 are auto-pruned on the next `sdd_append_signal` call. A warning is logged: `"Signal array exceeded 200 entries, auto-pruning oldest 50"`.
+- **TTL pruning**: `sdd_tick_maintenance` (target=`"memory"`) prunes signals older than 7 days (configurable).
+- **Max entries**: After TTL pruning, if still > 100 signals, only the most recent 100 are kept.
+
+Pruning is automatic — the orchestrator does not need to manage it explicitly.
+
 ## Gap Detection Protocol
 
 During pipeline execution, the orchestrator may encounter situations where no existing tool covers a needed capability.
