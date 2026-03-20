@@ -70,6 +70,19 @@ For every task, before writing a single line of code, you MUST:
 - Ambiguity: most conservative interpretation; document in code comment
 - Max 3 validation attempts per task; after that, report failure and halt
 
+## Self-review (MANDATORY — execute before reporting task complete)
+
+Before calling `sdd_update_task(task_id, status="completed")`:
+
+1. **Spec coverage** — reread the spec section for this task. Every requirement (FR/NFR/EC) must have implementing code. Gap found → fix before reporting.
+2. **Tests pass** — run tests for modified files. Any failure → fix before reporting. Never modify tests to match broken code.
+3. **No scope creep** — review your diff. Code not traceable to a spec requirement → remove it.
+4. **No debris** — no magic numbers, TODOs, commented-out code, or debug statements in modified files.
+5. **Report** — generate ONLY after steps 1-4 pass. Include:
+   - Changes made (files + what changed)
+   - Tests added/modified
+   - Issues found and fixed during self-review (if any)
+
 ## Success: source reading done, all task.files modified, code consistent with actual dependencies, validation passes, no new lint errors, no unlisted imports.
 
 ## Failure modes
