@@ -118,7 +118,76 @@ You initialize a project for SDD Autopilot by creating the required configuratio
    - If `docs/roadmap.md` already exists: do NOT overwrite. Report "Roadmap already exists, skipping."
    - Create `docs/` directory if it doesn't exist.
 
-9. **Create `docs/prd.md`** — ONLY if `docs/prd.md` does NOT already exist (including after migration in step 7):
+9. **Generate `.claude/rules/`** — Create SDD-specific rules for Claude Code. These rules are auto-loaded by Claude Code when working in this project, including in spawned subagents.
+
+   **ONLY create if `.claude/rules/` does NOT already contain SDD rule files.** If any of the three files below exist, skip this step and report "SDD rules already exist, skipping."
+
+   Create `.claude/rules/sdd-agent-defaults.md`:
+   ```markdown
+   ---
+   description: SDD Autopilot agent defaults — telemetry and verbosity conventions
+   paths:
+     - "specs/**"
+     - ".sdd/**"
+   ---
+
+   ## Output Constraints
+
+   - When called with verbosity=minimal: respond with ONLY the structured output (JSON/contract markers). No explanations, no reasoning, no suggestions.
+   - When called with verbosity=standard: structured output + 1-2 sentence summary.
+   - When called with verbosity=full (default): full output with reasoning.
+
+   ## Telemetry (mandatory for SDD pipeline agents)
+
+   Your FINAL line of output — after all work and signals — MUST be:
+
+   ```
+   [TELEMETRY] tool_calls={N} estimated_output_tokens={K}
+   ```
+
+   Where:
+   - `N` = total number of tool calls you made (count every Read, Write, Edit, Grep, Glob, Bash, MCP call, etc.)
+   - `K` = estimated total output tokens you generated. Heuristic: count approximate words in all your text responses (not tool calls) and multiply by 1.3.
+
+   This line is OBLIGATORY. Do not omit it. It must be the very last line of your final response.
+   ```
+
+   Create `.claude/rules/sdd-spec-contracts.md`:
+   ```markdown
+   ---
+   description: SDD spec contract markers — how to interpret immutable/negotiable sections in specs
+   paths:
+     - "specs/**"
+   ---
+
+   ## Spec Contract Rules
+
+   - `<!-- contract: immutable -->` — non-negotiable, do NOT modify/reinterpret/skip
+   - `<!-- guidance: negotiable -->` — suggestions, alternatives OK if justified
+   - `<!-- contract: interface-immutable, implementation-negotiable -->` — interface fixed, internals flexible
+   - `<!-- status: unresolved -->` — open questions, do NOT assume; emit SPEC_GAP signal
+   ```
+
+   Create `.claude/rules/sdd-workflow.md`:
+   ```markdown
+   ---
+   description: SDD pipeline workflow conventions — token optimization, external docs, context7 usage
+   paths:
+     - "specs/**"
+     - ".sdd/**"
+     - "src/**"
+   ---
+
+   ## Token optimization
+
+   When calling `sdd_get_state` or `sdd_memory_read`, pass `verbosity: "minimal"` to reduce response size. You only need state/tasks summary, not full transitions and signals.
+
+   ## External docs
+
+   Use context7 MCP tools (`resolve-library-id` + `get-library-docs`) for live API docs when available.
+   ```
+
+10. **Create `docs/prd.md`** — ONLY if `docs/prd.md` does NOT already exist (including after migration in step 7-8):
    ```markdown
    # Product Requirements Document
 
@@ -140,7 +209,7 @@ You initialize a project for SDD Autopilot by creating the required configuratio
    | [term] | [definition] | [confusable term] |
    ```
 
-10. **Report to user**:
+11. **Report to user**:
    ```
    SDD Autopilot initialized successfully.
 
@@ -148,6 +217,9 @@ You initialize a project for SDD Autopilot by creating the required configuratio
    ✓ .sdd/state.json
    ✓ constitution.md
    ✓ CLAUDE.md (or "skipped — already exists")
+   ✓ .claude/rules/sdd-agent-defaults.md (or "skipped — already exists")
+   ✓ .claude/rules/sdd-spec-contracts.md (or "skipped — already exists")
+   ✓ .claude/rules/sdd-workflow.md (or "skipped — already exists")
    ✓ docs/prd.md
    ✓ docs/roadmap.md (or "skipped — no PRD" or "skipped — already exists")
 

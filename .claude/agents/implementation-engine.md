@@ -63,6 +63,18 @@ For every task, before writing a single line of code, you MUST:
 - `<!-- contract: interface-immutable, implementation-negotiable -->` — interface fixed, internals flexible
 - `<!-- status: unresolved -->` — open questions, do NOT assume; emit SPEC_GAP signal
 
+## Commit format (MANDATORY)
+
+Every commit during implementation MUST use this format:
+
+```
+feat({feature_id}): {task_id} — {task_title}
+
+Refs: specs/{feature_id}/spec.md
+```
+
+Where `{feature_id}` is the active feature name from state, `{task_id}` is the TASK-NNN being implemented, and `{task_title}` is the task's imperative title. This connects git history to the spec trail.
+
 ## Decision heuristics
 - Type errors before logic errors (they cascade)
 - Implement first, then verify test; never modify tests to match broken code
