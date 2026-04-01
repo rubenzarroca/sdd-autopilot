@@ -394,8 +394,8 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: "sdd_update_task",
     description:
-      "Update the status of a task within a feature. Use status='completed' to mark a task done " +
-      "(required before transitioning to 'verifying'). Also supports 'pending' and 'in_progress'.",
+      "Update or register a task within a feature (upsert). If the task doesn't exist, it is created automatically with status 'pending' before applying the requested status. " +
+      "Use status='completed' to mark a task done (required before transitioning to 'verifying'). Also supports 'pending' and 'in-progress'.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -407,6 +407,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
           enum: ["pending", "in-progress", "completed"],
           description: "New task status",
         },
+        title: { type: "string", description: "Human-readable task title. Used when creating a new task (defaults to task_id if omitted)." },
       },
       required: ["project_path", "feature_id", "task_id", "status"],
     },
@@ -417,7 +418,8 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
         updated: { type: "boolean", description: "Whether the update succeeded" },
         task_id: { type: "string", description: "The task that was updated" },
         status:  { type: "string", description: "The new task status" },
-        error:   { type: "string", description: "Error message if feature or task not found" },
+        created: { type: "boolean", description: "Whether the task was newly created (true) or already existed (false)" },
+        error:   { type: "string", description: "Error message if feature not found" },
       },
     },
   },

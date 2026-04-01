@@ -1054,6 +1054,7 @@ export async function handleUpdateTask(params: {
   feature_id: string;
   task_id: string;
   status: "pending" | "in-progress" | "completed";
+  title?: string;
 }): Promise<unknown> {
   const sm = new StateManager(params.project_path);
   const feature = await sm.getFeature(params.feature_id);
@@ -1061,20 +1062,31 @@ export async function handleUpdateTask(params: {
   if (!feature) {
     return { error: `Feature "${params.feature_id}" not found` };
   }
+
+  // Upsert: auto-create task if it doesn't exist yet
+  let created = false;
   if (!feature.tasks[params.task_id]) {
-    return { error: `Task "${params.task_id}" not found. Available: ${Object.keys(feature.tasks).join(", ")}` };
+    const state = await sm.read();
+    state.features[params.feature_id].tasks[params.task_id] = {
+      status: "pending",
+      title: params.title ?? params.task_id,
+    };
+    await sm.write(state);
+    created = true;
   }
 
   if (params.status === "completed") {
     await sm.markTaskCompleted(params.feature_id, params.task_id);
-  } else {
+  } else if (!created || params.status !== "pending") {
+    // Skip redundant write when we just created with "pending"
     const state = await sm.read();
     const t = state.features[params.feature_id].tasks[params.task_id];
     t.status = params.status;
+    if (params.title) t.title = params.title;
     await sm.write(state);
   }
 
-  return { updated: true, task_id: params.task_id, status: params.status };
+  return { updated: true, task_id: params.task_id, status: params.status, created };
 }
 
 // ─── 13. sdd_update_feature ──────────────────────────────────────

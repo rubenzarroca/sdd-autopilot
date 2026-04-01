@@ -10,6 +10,7 @@
 - Run recording at pipeline completion (path, duration, files, score)
 
 ### Tools
+- `sdd_update_task` is now upsert: creates task if it doesn't exist (fixes task registration gap — no separate register tool needed)
 - Unified TOOLS array and HANDLER_MAP into single TOOL_REGISTRY
 - Added tool stratification: core (14), observability (6), metacognition (13), infra (4)
 - Metacognition tools gated behind run_counter >= 5 (self-enforced + orchestrator filter)

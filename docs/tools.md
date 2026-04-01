@@ -22,7 +22,7 @@ SDD Autopilot exposes 38 MCP tools organized into four categories. All tools are
 | `sdd_memory_read` | Read project or user memory by section |
 | `sdd_memory_write` | Write to project or user memory |
 | `sdd_append_signal` | Emit a signal (dual-write: state.json + signals.jsonl) |
-| `sdd_update_task` | Mark a task as pending / in-progress / completed |
+| `sdd_update_task` | Update or register a task (upsert). Creates the task if it doesn't exist, then applies the requested status. Accepts optional `title`. |
 | `sdd_tick_maintenance` | Decrement TTLs on patterns and memory entries (`target='memory'` or `target='patterns'`) |
 | `sdd_update_feature` | Persist feature metadata: branch, worktree_path, plan_path, tasks_path, etc. |
 | `sdd_refresh_state` | Invalidate in-memory state cache (force next read to reload from disk). Use when external agents modify `state.json` directly. |

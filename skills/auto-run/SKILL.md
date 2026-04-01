@@ -195,7 +195,7 @@ Execute phases sequentially. Each phase follows the phase protocol below.
      - **review**: route by execution mode (Light/Standard: `/code-review:code-review`; Full: `/pr-review-toolkit:review-pr code errors tests`; fallback: haiku-validator). Issues with confidence >= 80: FAIL -> show findings -> `sdd_transition(reviewing->fix_review)`. No high-confidence issues: PASS -> `sdd_transition(reviewing->pr_created)`.
    - Emit metrics and phase confidence — see `docs/orchestrator/observability.md`
    - For plan phase: `sdd_update_feature` to persist `plan_path`
-   - For tasks phase: `sdd_update_feature` to persist `tasks_path`, register each task in `feature.tasks`
+   - For tasks phase: `sdd_update_feature` to persist `tasks_path`, then `sdd_update_task` for each parsed task (upsert — creates if missing)
 9. If gate failed: `sdd_classify_failure` and route accordingly.
 10. Proceed to next phase.
 
