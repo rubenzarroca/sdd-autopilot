@@ -182,23 +182,114 @@ Execute phases sequentially. Each phase follows the phase protocol below.
 
 ### Phase protocol
 
-1. Use feature snapshot from previous `sdd_transition` response (cache hit). Only call `sdd_get_state` if: first phase, error recovery, or no snapshot. Use `verbosity: "minimal"` for mid-pipeline checks.
-2. Call `sdd_get_contract` with `verbosity: "minimal"`.
-3. Check contract's `input.optional` for `memory.*` entries. If present, call `sdd_memory_read` with `verbosity: "standard"`. Phase-to-memory: specify → `project_conventions`; plan → `learned_patterns`; implement → both; verify → `project_conventions`. Skip for triage, tasks, review, pr.
-4. Read ONLY artifact files in the contract's `input.required`. **NEVER pre-research codebase for subagents.**
-5. Launch the subagent directly. Record `phase_start = Date.now()` before the Agent call.
-6. **Token extraction (MANDATORY)**: After the Agent tool returns, parse the `<usage>` block to get `total_tokens` and `tool_uses`. Then split using the phase ratio table from `docs/orchestrator/observability.md`: `tokens_in = round(total_tokens × input_ratio)`, `tokens_out = total_tokens - tokens_in`. Calculate `cost_usd` using model pricing from the same doc. Store `tokens_in`, `tokens_out`, `tool_calls_count`, and `cost_usd` for the METRICS call in step 8. If the `<usage>` block is missing, log a warning and pass null.
-7. Call `sdd_evaluate_gate` with `verbosity: "minimal"`.
-8. If gate passed:
+For every phase, execute these steps in order. No shortcuts — every step is mandatory unless marked otherwise.
+
+**Token ratio table** (for step 6):
+
+| Phase | Agent | input_ratio | output_ratio | Model |
+|-------|-------|-------------|--------------|-------|
+| triage | haiku-triage | 0.90 | 0.10 | haiku |
+| specify | spec-generator | 0.70 | 0.30 | sonnet |
+| plan | plan-architect | 0.75 | 0.25 | sonnet |
+| tasks | task-decomposer | 0.80 | 0.20 | sonnet |
+| implement | implementation-engine | 0.60 | 0.40 | sonnet |
+| verify | verification-engine | 0.85 | 0.15 | sonnet |
+| review | code-reviewer | 0.80 | 0.20 | sonnet |
+
+**Model pricing** (for step 6):
+
+| Model | Input $/1M | Output $/1M |
+|-------|-----------|-------------|
+| haiku | $1 | $5 |
+| sonnet | $3 | $15 |
+| opus | $15 | $75 |
+
+**Steps:**
+
+1. **State snapshot**: Use feature snapshot from previous `sdd_transition` response (cache hit). Only call `sdd_get_state` if: first phase, error recovery, or no snapshot. Use `verbosity: "minimal"` for mid-pipeline checks.
+
+2. **LOG phase_start**:
+   ```
+   sdd_log_event(project_path, feature_id, event_type="phase_start", phase="{phase}",
+     agent_id="orchestrator", data={ agent: "{subagent-name}", model: "{model}" })
+   ```
+
+3. **Read contract**: Call `sdd_get_contract` with `verbosity: "minimal"`.
+
+4. **Memory** (optional): Check contract's `input.optional` for `memory.*` entries. If present, call `sdd_memory_read` with `verbosity: "standard"`. Phase-to-memory: specify → `project_conventions`; plan → `learned_patterns`; implement → both; verify → `project_conventions`. Skip for triage, tasks, review, pr.
+
+5. **Read inputs**: Read ONLY artifact files in the contract's `input.required`. **NEVER pre-research codebase for subagents.**
+
+6. **Launch subagent + token extraction**:
+   - Record `started_at = new Date().toISOString()` and `t0 = Date.now()` BEFORE the Agent call.
+   - LOG subagent launch:
+     ```
+     sdd_log_event(project_path, feature_id, event_type="subagent_launch", phase="{phase}",
+       agent_id="orchestrator", data={ agent_name: "{subagent}", model: "{model}", mode: "primary" })
+     ```
+   - Launch the subagent via the Agent tool.
+   - Record `completed_at = new Date().toISOString()` and `duration_ms = Date.now() - t0` AFTER the Agent returns.
+   - **Token extraction (MANDATORY)**: Parse the `<usage>` block from the Agent result to get `total_tokens` and `tool_uses`. Then split:
+     ```
+     tokens_in  = round(total_tokens × input_ratio)   // from ratio table above
+     tokens_out = total_tokens - tokens_in
+     cost_usd   = (tokens_in / 1_000_000) × input_price + (tokens_out / 1_000_000) × output_price
+     ```
+     Store `tokens_in`, `tokens_out`, `tool_calls_count` (from `tool_uses`), and `cost_usd`.
+   - If the `<usage>` block is missing: LOG a warning (`event_type="phase_complete"`, `data={ warning: "usage block missing" }`) and set tokens to null.
+
+7. **Evaluate gate**: Call `sdd_evaluate_gate` with `verbosity: "minimal"`.
+
+8. **If gate passed — transition**:
    - `gate.type = "mechanical"` or `"haiku-validator"`: call `sdd_transition`
    - `gate.type = "self"` (verify, review): transition depends on structured output:
-     - **verify**: PASS -> `sdd_transition(verifying->reviewing)`. FAIL/SPEC_GAP -> step 9.
-     - **review**: route by execution mode (Light/Standard: `/code-review:code-review`; Full: `/pr-review-toolkit:review-pr code errors tests`; fallback: haiku-validator). Issues with confidence >= 80: FAIL -> show findings -> `sdd_transition(reviewing->fix_review)`. No high-confidence issues: PASS -> `sdd_transition(reviewing->pr_created)`.
-   - Emit metrics (using `tokens_in` and `tokens_out` extracted in step 6) and phase confidence — see `docs/orchestrator/observability.md`
+     - **verify**: PASS → `sdd_transition(verifying->reviewing)`. FAIL/SPEC_GAP → step 11.
+     - **review**: route by execution mode (Light/Standard: `/code-review:code-review`; Full: `/pr-review-toolkit:review-pr code errors tests`; fallback: haiku-validator). Issues with confidence >= 80: FAIL → show findings → `sdd_transition(reviewing->fix_review)`. No high-confidence issues: PASS → `sdd_transition(reviewing->pr_created)`.
+   - LOG state transition:
+     ```
+     sdd_log_event(project_path, feature_id, event_type="state_transition", phase="{phase}",
+       agent_id="orchestrator", data={ from_state: "{from}", to_state: "{to}", triggered_by: "{agent_id}" })
+     ```
    - For plan phase: `sdd_update_feature` to persist `plan_path`
    - For tasks phase: `sdd_update_feature` to persist `tasks_path`, then `sdd_update_task` for each parsed task (upsert — creates if missing)
-9. If gate failed: `sdd_classify_failure` and route accordingly.
-10. Proceed to next phase.
+
+9. **Emit metrics** (ALWAYS — whether gate passed or failed):
+   ```
+   sdd_emit_metrics(project_path, metrics={
+     run_id, feature_id, phase: "{phase}", agent: "{subagent}", model: "{model}",
+     started_at, completed_at, duration_ms,
+     tokens_in,              // from step 6 (null only if <usage> missing)
+     tokens_out,             // from step 6 (null only if <usage> missing)
+     tool_calls_count,       // from step 6
+     gate_result: "pass"|"fail"|"skip",
+     gate_attempts: N,
+     findings_count: N,
+     findings_severity: [],
+     fix_loop_count: N,
+     delta_direction: null|"improving"|"regressing"|"stable",
+     feature_type: "{type}"|null,
+     complexity: "{level}"|null
+   })
+   ```
+
+10. **Phase confidence** (ALWAYS after gate pass; skip on gate fail):
+    ```
+    sdd_phase_confidence(project_path, feature_id, phase="{phase}",
+      confidence: {value},    // 0.85 clean, 0.65 after 1 fix loop, 0.45 after 2+
+      reasoning: "{why}",
+      factors: { gate_attempts: N, fix_loops: N, opus_review_revised: false, partial_output: false })
+    ```
+    Confidence rules: clean first attempt = `0.85`. After 1 fix loop = `0.65`. After 2+ fix loops = `0.45`. If opus review required revision: subtract `0.1`. If output partial/incomplete: cap at `0.5`.
+
+11. **LOG phase_complete**:
+    ```
+    sdd_log_event(project_path, feature_id, event_type="phase_complete", phase="{phase}",
+      agent_id="orchestrator", data={ gate_result: "passed"|"failed", duration_ms, tokens_total: total_tokens })
+    ```
+
+12. If gate failed: `sdd_classify_failure` and route accordingly.
+
+13. Proceed to next phase.
 
 ### Skill routing (by feature_type)
 
@@ -345,6 +436,21 @@ Phase 8 inline:
 
 After PR creation, verify merge via `gh api`. If merged: follow "On user-reported merge" flow. If not: proceed to post-pipeline.
 
+**PR phase metrics (MANDATORY for both modes):**
+The PR phase is inline (no subagent), so there is no `<usage>` block. Emit metrics with tokens null and `gate_result: "skip"`:
+```
+sdd_emit_metrics(project_path, metrics={
+  run_id, feature_id, phase: "pr", agent: "orchestrator", model: null,
+  started_at, completed_at, duration_ms,
+  tokens_in: null, tokens_out: null, tool_calls_count: 0,
+  gate_result: "skip", gate_attempts: 0,
+  findings_count: 0, findings_severity: [],
+  fix_loop_count: 0, delta_direction: null,
+  feature_type, complexity
+})
+```
+Record `started_at`/`t0` before the PR steps and `completed_at`/`duration_ms` after.
+
 ## Observability, signals, post-pipeline, and adaptive orchestration
 
 -> `docs/orchestrator/observability.md` — logging patterns, metrics schemas
@@ -372,9 +478,16 @@ After PR phase (or implementation for Express), record the run:
 
 ## Post-Pipeline (conditional on run history)
 
-After pipeline completion, ALWAYS:
-1. Call `sdd_emit_metrics`
-2. Call `sdd_record_run` (see Run Recording above)
+After pipeline completion, ALWAYS run these steps (regardless of outcome — success, failure, escalation):
+
+1. **Validate metrics.jsonl**: Read `.sdd/runs/{feature_id}/metrics.jsonl` for the current `run_id`. Count phases with `tokens_in: null` → MUST be 0. Count phases with `tool_calls_count: 0` when the agent clearly used tools → MUST be 0. If any validation fails:
+   ```
+   sdd_log_event(project_path, feature_id, event_type="phase_complete", phase="post_pipeline",
+     agent_id="orchestrator", data={ warning: "Token instrumentation incomplete: {N} phases missing token data" })
+   ```
+2. Call `sdd_get_run_summary(project_path, feature_id, run_id)` — generates `summary.json`, returns RunSummary with `phase_metrics` and `threshold_alerts`.
+3. Call `sdd_compute_score(project_path, feature_id, review_decision)` — computes quality + efficiency scores, returns `pipeline_score` and `golden_comparison`.
+4. Call `sdd_record_run` (see Run Recording above).
 
 Then, based on `run_counter`:
 
