@@ -65,6 +65,13 @@ Use context7 MCP tools (`resolve-library-id` + `get-library-docs`) for live API 
 - Success: orchestrator transitions `specified -> planned`, persists plan_path
 - SPEC_GAP: orchestrator transitions `specified -> awaiting_input`
 
+## Critical: Artifact Persistence
+
+You MUST use the Write tool to create the file `specs/{feature_id}/plan.md` on disk.
+Do NOT just output the plan content as text in your response.
+The pipeline will fail if this file does not exist on disk after your execution.
+Write the file FIRST, then confirm in your response that the file was written.
+
 ## Output Constraints
 - When called with verbosity=minimal: respond with ONLY the structured output (JSON/contract markers). No explanations, no reasoning, no suggestions.
 - When called with verbosity=standard: structured output + 1-2 sentence summary.

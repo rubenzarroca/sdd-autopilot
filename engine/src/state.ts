@@ -3,6 +3,7 @@
 // Governance lives here (executable), not in prompts (ignorable).
 
 import { readFile, mkdir, stat } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { atomicWriteJSON } from "./utils.js";
@@ -387,6 +388,30 @@ export class StateManager {
         code: "CIRCUIT_BREAKER" as TransitionErrorCode,
         reason: `Circuit breaker: ${String((abortSignal.payload as Record<string, unknown>).message ?? "delta_check returned abort. Fix loop diverging.")}`,
       };
+    }
+
+    // ── Artifact existence gate ────────────────────────────────
+    // Refuse to advance if the required artifact from the previous phase is missing on disk.
+    // Only applies to transitions where a subagent must have written a file.
+    const ARTIFACT_REQUIREMENTS: Array<{ from: FeatureState; to: FeatureState; artifact: string; agent: string }> = [
+      { from: "specified", to: "planned",      artifact: `specs/${featureName}/spec.md`,  agent: "spec-generator" },
+      { from: "planned",   to: "decomposed",   artifact: `specs/${featureName}/plan.md`,  agent: "plan-architect" },
+      { from: "decomposed", to: "implementing", artifact: `specs/${featureName}/tasks.md`, agent: "task-decomposer" },
+    ];
+
+    const artifactReq = ARTIFACT_REQUIREMENTS.find(r => r.from === fromState && r.to === toState);
+    if (artifactReq) {
+      const projectRoot = dirname(dirname(this.statePath)); // .sdd/state.json → project root
+      const artifactPath = join(projectRoot, artifactReq.artifact);
+      if (!existsSync(artifactPath)) {
+        return {
+          ok: false,
+          code: "PRECONDITION_FAILED",
+          reason: `Artifact missing: expected "${artifactReq.artifact}" at ${artifactPath}. `
+            + `Transition ${fromState} → ${toState} requires this file to exist on disk. `
+            + `The ${artifactReq.agent} agent must use the Write tool to create this file before the pipeline can advance.`,
+        };
+      }
     }
 
     // ── Apply transition ──────────────────────────────────────

@@ -87,6 +87,13 @@ Self-review: every FR/NFR/EC covered, valid DAG (no cycles), foundation tasks fi
 - Success: orchestrator transitions `planned -> decomposed`, persists tasks_path
 - SPEC_GAP: orchestrator re-routes to plan-architect or spec-generator
 
+## Critical: Artifact Persistence
+
+You MUST use the Write tool to create the file `specs/{feature_id}/tasks.md` on disk.
+Do NOT just output the tasks content as text in your response.
+The pipeline will fail if this file does not exist on disk after your execution.
+Write the file FIRST, then confirm in your response that the file was written.
+
 ## Output Constraints
 - When called with verbosity=minimal: respond with ONLY the structured output (JSON/contract markers). No explanations, no reasoning, no suggestions.
 - When called with verbosity=standard: structured output + 1-2 sentence summary.

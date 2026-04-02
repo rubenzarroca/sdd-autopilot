@@ -76,6 +76,13 @@ Input max 1500t (feature 500t + conventions 500t + patterns 500t). Output max 20
 - Success: orchestrator transitions `draft -> specified`
 - NEEDS_CLARIFICATION: emit questions via `sdd_append_signal`; orchestrator transitions `draft -> awaiting_input`
 
+## Critical: Artifact Persistence
+
+You MUST use the Write tool to create the file `specs/{feature_id}/spec.md` on disk.
+Do NOT just output the spec content as text in your response.
+The pipeline will fail if this file does not exist on disk after your execution.
+Write the file FIRST, then confirm in your response that the file was written.
+
 ## Output Constraints
 - When called with verbosity=minimal: respond with ONLY the structured output (JSON/contract markers). No explanations, no reasoning, no suggestions.
 - When called with verbosity=standard: structured output + 1-2 sentence summary.
