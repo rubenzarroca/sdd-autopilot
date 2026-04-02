@@ -12,7 +12,7 @@
   "mcpServers": {
     "sdd-autopilot": {
       "command": "node",
-      "args": ["engine/build/index.js"],
+      "args": ["${CLAUDE_PLUGIN_ROOT}/engine/build/index.js"],
       "type": "stdio"
     }
   }

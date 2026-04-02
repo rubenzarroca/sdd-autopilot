@@ -64,7 +64,7 @@ For transition error handling (UNAUTHORIZED, INVALID_TRANSITION, PRECONDITION_FA
 
 Before doing anything else, call `sdd_get_state` with the project path (no other arguments).
 
-- **If the tool does not exist**: STOP. Show: `> SDD MCP server not found. Set it up with: cd <plugin-path>/engine && npm run build && claude mcp add sdd-server -- node <plugin-path>/engine/build/index.js $(pwd)`. Then restart Claude Code and retry.
+- **If the tool does not exist**: STOP immediately. Show: `> SDD MCP server not connected. Run: cd ~/.claude/plugins/marketplaces/sdd-autopilot/engine && npm install && npm run build — then restart Claude Code.` If `--headless`: write `TLDR: FAILED — SDD MCP server not connected` and exit with code 1 (use Bash: `exit 1`). Do NOT continue, do NOT attempt any pipeline phases.
 - **If the tool returns an error** (e.g. state.json not found): MCP server is running. Continue — step 3 will auto-initialize.
 - **If valid state**: show `MCP connected | Project: {project_name}` and continue. If the response includes `sdd_mode: "headless"`, show `Mode: headless` and set `headless = true` for the rest of the run.
 
@@ -318,7 +318,8 @@ Group batch_eligible tasks into batches of up to 3. For details, see `docs/orche
 
 If `--headless` and the pipeline reaches `escalated` or `awaiting_input`:
 1. Write: `TLDR: FAILED — {reason for escalation or awaiting_input}`
-2. Exit immediately. Do NOT prompt for human input. Do NOT wait.
+2. Use Bash tool to run `exit 1` — this ensures the process exits with a non-zero code that downstream orchestrators can detect.
+3. Do NOT prompt for human input. Do NOT wait. Do NOT continue.
 
 ## Escalation protocol
 

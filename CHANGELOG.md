@@ -1,12 +1,18 @@
 # Changelog
 
-## [Unreleased] - Headless Mode
+## [Unreleased] - Headless Mode + MCP Connection Fix
+
+### Critical Fix
+- **plugin.json**: use `${CLAUDE_PLUGIN_ROOT}` for MCP server path — fixes server not connecting when cwd != plugin dir
+- **engine/package.json**: add `postinstall` script — auto-builds after `npm install`, no manual build step needed
 
 ### Pipeline
 - Added `--headless` flag for external orchestrators (CI, autonomous agents)
 - Headless mode: no PR, no push, no human prompts, exit code 0/1 contract
 - TLDR summary on last line of stdout for machine parsing
 - New state transition: `reviewing -> merged` (direct, skips `pr_created` in headless)
+- Preflight check now hard-stops with `exit 1` if MCP server not connected (prevents silent failures)
+- Headless errors (`escalated`, `awaiting_input`) explicitly exit with code 1
 
 ### MCP Server
 - Reads `SDD_MODE` environment variable at startup (`interactive` | `headless`)

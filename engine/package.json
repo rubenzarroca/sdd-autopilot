@@ -8,6 +8,7 @@
     "sdd-autopilot": "build/index.js"
   },
   "scripts": {
+    "postinstall": "npm run build",
     "build": "tsc && cp src/contracts.json build/contracts.json && node scripts/compute-tools-hash.mjs && cp src/tools-manifest.json build/tools-manifest.json",
     "dev": "tsc --watch",
     "start": "node build/index.js",
