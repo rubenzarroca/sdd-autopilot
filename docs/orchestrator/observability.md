@@ -96,18 +96,9 @@ duration_ms: {D}</usage>
 
 Extract these three integers: `total_tokens`, `tool_uses`, `duration_ms`.
 
-#### Step 2 — Look for the `[TELEMETRY]` tag from the subagent
+#### Step 2 — Split tokens_in / tokens_out via ratio table
 
-The subagent includes a final line with format:
-```
-[TELEMETRY] tool_calls={N} estimated_output_tokens={K}
-```
-If this line exists, use `estimated_output_tokens` as `tokens_out`.
-If NOT found, fall through to Step 3.
-
-#### Step 3 — Calculate tokens_in and tokens_out via ratio table
-
-Use these ratios per phase (based on each agent's activity profile):
+The Agent tool only exposes `total_tokens`. Apply these ratios per phase to estimate the split:
 
 | Phase     | Agent                 | input_ratio | output_ratio |
 |-----------|-----------------------|-------------|--------------|
@@ -119,17 +110,26 @@ Use these ratios per phase (based on each agent's activity profile):
 | verify    | verification-engine   | 0.85        | 0.15         |
 | review    | code-reviewer         | 0.80        | 0.20         |
 
-Calculation:
 ```
 tokens_in  = round(total_tokens × input_ratio)
-tokens_out = round(total_tokens × output_ratio)
+tokens_out = total_tokens - tokens_in
 ```
 
-Validation: `tokens_in + tokens_out` MUST equal `total_tokens` (±1 for rounding).
-If not, adjust: `tokens_in = total_tokens - tokens_out`.
+> If Claude Code exposes `input_tokens`/`output_tokens` in the Agent response in the future, use those directly and skip the ratio table.
 
-If Step 2 found `estimated_output_tokens`, use it as `tokens_out` and compute:
-`tokens_in = total_tokens - tokens_out`.
+#### Step 3 — Calculate cost_usd per phase
+
+Apply model pricing:
+
+| Model  | Input / 1M tokens | Output / 1M tokens |
+|--------|--------------------|---------------------|
+| haiku  | $1                 | $5                  |
+| sonnet | $3                 | $15                 |
+| opus   | $15                | $75                 |
+
+```
+cost_usd = (tokens_in / 1_000_000) × input_price + (tokens_out / 1_000_000) × output_price
+```
 
 #### Step 4 — Call sdd_emit_metrics with complete data
 
@@ -143,16 +143,18 @@ If the `<usage>` block is missing (e.g., phase was a skip or error):
 started_at  = new Date().toISOString()  // capture before Agent call
 t0          = Date.now()                // capture before Agent call
 // ... invoke subagent via Agent tool ...
-// Parse <usage> block and [TELEMETRY] tag from Agent result
+// Parse <usage> block from Agent result
+// Apply ratio table (Step 2) to get tokens_in/tokens_out
+// Apply model pricing (Step 3) to get cost_usd
 completed_at = new Date().toISOString() // capture after Agent returns
 duration_ms  = Date.now() - t0
 
 METRICS(metrics={
   run_id, feature_id, phase, agent, model,
   started_at, completed_at, duration_ms,
-  tokens_in: N,            // from Step 2 or Step 3
-  tokens_out: N,           // from Step 2 or Step 3
-  tool_calls_count: N,     // from <usage> tool_uses or [TELEMETRY] tool_calls
+  tokens_in: N,            // from Step 2 (ratio split)
+  tokens_out: N,           // from Step 2 (ratio split)
+  tool_calls_count: N,     // from <usage> tool_uses
   gate_result: "pass"|"fail"|"skip",
   gate_attempts: N,
   findings_count: N,

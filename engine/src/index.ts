@@ -956,7 +956,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     description:
       "Persist PhaseMetrics for a completed pipeline phase to .sdd/runs/{feature}/metrics.jsonl (append-only). " +
       "Call after each phase completes, before the next phase starts. " +
-      "tokens_in and tokens_out are null when the Agent tool does not expose usage natively.",
+      "tokens_in and tokens_out are derived from total_tokens (from Agent <usage> block) split by phase ratio table. Pass null only if <usage> block is missing.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -975,6 +975,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
             duration_ms:       { type: "number" },
             tokens_in:         { type: ["number", "null"] },
             tokens_out:        { type: ["number", "null"] },
+            cost_usd:          { type: ["number", "null"], description: "Estimated cost in USD for this phase (from model pricing × token split)" },
             tool_calls_count:  { type: "number" },
             gate_result:       { type: "string", enum: ["pass", "fail", "skip"] },
             gate_attempts:     { type: "number" },

@@ -186,15 +186,15 @@ Execute phases sequentially. Each phase follows the phase protocol below.
 2. Call `sdd_get_contract` with `verbosity: "minimal"`.
 3. Check contract's `input.optional` for `memory.*` entries. If present, call `sdd_memory_read` with `verbosity: "standard"`. Phase-to-memory: specify → `project_conventions`; plan → `learned_patterns`; implement → both; verify → `project_conventions`. Skip for triage, tasks, review, pr.
 4. Read ONLY artifact files in the contract's `input.required`. **NEVER pre-research codebase for subagents.**
-5. Launch the subagent directly.
-6. (Reserved)
+5. Launch the subagent directly. Record `phase_start = Date.now()` before the Agent call.
+6. **Token extraction (MANDATORY)**: After the Agent tool returns, parse the `<usage>` block to get `total_tokens` and `tool_uses`. Then split using the phase ratio table from `docs/orchestrator/observability.md`: `tokens_in = round(total_tokens × input_ratio)`, `tokens_out = total_tokens - tokens_in`. Calculate `cost_usd` using model pricing from the same doc. Store `tokens_in`, `tokens_out`, `tool_calls_count`, and `cost_usd` for the METRICS call in step 8. If the `<usage>` block is missing, log a warning and pass null.
 7. Call `sdd_evaluate_gate` with `verbosity: "minimal"`.
 8. If gate passed:
    - `gate.type = "mechanical"` or `"haiku-validator"`: call `sdd_transition`
    - `gate.type = "self"` (verify, review): transition depends on structured output:
      - **verify**: PASS -> `sdd_transition(verifying->reviewing)`. FAIL/SPEC_GAP -> step 9.
      - **review**: route by execution mode (Light/Standard: `/code-review:code-review`; Full: `/pr-review-toolkit:review-pr code errors tests`; fallback: haiku-validator). Issues with confidence >= 80: FAIL -> show findings -> `sdd_transition(reviewing->fix_review)`. No high-confidence issues: PASS -> `sdd_transition(reviewing->pr_created)`.
-   - Emit metrics and phase confidence — see `docs/orchestrator/observability.md`
+   - Emit metrics (using `tokens_in` and `tokens_out` extracted in step 6) and phase confidence — see `docs/orchestrator/observability.md`
    - For plan phase: `sdd_update_feature` to persist `plan_path`
    - For tasks phase: `sdd_update_feature` to persist `tasks_path`, then `sdd_update_task` for each parsed task (upsert — creates if missing)
 9. If gate failed: `sdd_classify_failure` and route accordingly.

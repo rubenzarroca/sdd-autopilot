@@ -37,7 +37,7 @@ const REQUIRED_FIELDS: Record<string, string> = {
   gate_result: "string", gate_attempts: "number", findings_count: "number", fix_loop_count: "number",
 };
 const OPTIONAL_FIELDS: Record<string, string> = {
-  tokens_in: "number", tokens_out: "number", tool_calls_count: "number",
+  tokens_in: "number", tokens_out: "number", tool_calls_count: "number", cost_usd: "number",
   delta_direction: "string", feature_type: "string", complexity: "string",
 };
 const GATE_RESULT_VALUES = new Set(["pass", "fail", "skip"]);
@@ -61,7 +61,7 @@ function validateMetrics(m: Record<string, unknown>): { valid: boolean; errors: 
     if (typeof m[tsField] === "string" && isNaN(new Date(m[tsField] as string).getTime()))
       errors.push({ field: tsField, message: `Invalid ISO8601 timestamp: "${m[tsField]}"` });
   }
-  for (const numField of ["duration_ms", "gate_attempts", "findings_count", "fix_loop_count", "tokens_in", "tokens_out", "tool_calls_count"]) {
+  for (const numField of ["duration_ms", "gate_attempts", "findings_count", "fix_loop_count", "tokens_in", "tokens_out", "tool_calls_count", "cost_usd"]) {
     if (numField in m && typeof m[numField] === "number" && (m[numField] as number) < 0)
       errors.push({ field: numField, message: `Value must be non-negative, got ${m[numField]}` });
   }
