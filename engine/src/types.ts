@@ -467,12 +467,15 @@ export interface PipelineContracts {
 
 // ─── Pipeline Config ─────────────────────────────────────────────
 
+export type SddMode = "interactive" | "headless";
+
 export interface PipelineConfig {
   projectPath: string;
   featureDescription: string;
   maxVerifyAttempts: number;
   maxReviewAttempts: number;
   maxPhaseIterations: number;
+  sdd_mode?: SddMode;
 }
 
 export const DEFAULT_CONFIG: Omit<PipelineConfig, "projectPath" | "featureDescription"> = {

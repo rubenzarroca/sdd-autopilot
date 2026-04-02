@@ -8,7 +8,7 @@ import { execSync } from "node:child_process";
 import { homedir } from "node:os";
 import { StateManager, AGENT_PERMISSIONS } from "./state.js";
 import { MemoryManager, sanitizeMemoryContent, validateExtractionFilter, consolidateEntry } from "./memory.js";
-import type { AgentId, FeatureState, PipelineContracts, RunHistoryEntry } from "./types.js";
+import type { AgentId, FeatureState, PipelineContracts, RunHistoryEntry, SddMode } from "./types.js";
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
@@ -16,6 +16,16 @@ import { fileExists, atomicAppendJSONL } from "./utils.js";
 
 // ─── Verbosity (shared utility) ─────────────────────────────────
 import { resolveVerbosity, type Verbosity } from "./verbosity.js";
+
+// ─── SDD Mode (read from index.ts, set via SDD_MODE env var) ────
+// Lazy import to avoid circular dependency at module init time.
+let _sddMode: SddMode | null = null;
+function getSddMode(): SddMode {
+  if (_sddMode === null) {
+    _sddMode = process.env.SDD_MODE === "headless" ? "headless" : "interactive";
+  }
+  return _sddMode;
+}
 
 // ─── Load contracts.json at startup ──────────────────────────────
 
@@ -156,8 +166,10 @@ export async function handleGetState(params: {
   }
 
   // Full state (no feature_id) — apply verbosity
+  const sdd_mode = getSddMode();
   if (v === "minimal") {
     return {
+      sdd_mode,
       active_feature: state.active_feature,
       feature_count: Object.keys(state.features).length,
       features_summary: Object.entries(state.features).map(([id, f]) => ({ id, state: f.state })),
@@ -166,6 +178,7 @@ export async function handleGetState(params: {
   }
   if (v === "standard") {
     return {
+      sdd_mode,
       version: state.version,
       project: state.project,
       active_feature: state.active_feature,
@@ -180,7 +193,7 @@ export async function handleGetState(params: {
       })),
     };
   }
-  return state;
+  return { sdd_mode, ...state };
 }
 
 // ─── 2. sdd_transition ────────────────────────────────────────────

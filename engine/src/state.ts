@@ -68,6 +68,8 @@ export const AGENT_PERMISSIONS: Record<AgentId, TransitionEdge[]> = {
     // Review phase (all modes): orchestrator handles review via /code-review plugin
     { from: "reviewing",      to: "pr_created" },        // APPROVE
     { from: "reviewing",      to: "fix_review" },        // REQUEST_CHANGES
+    // Headless mode: skip pr_created, go directly to merged (no PR needed)
+    { from: "reviewing",      to: "merged" },
     // Fallback: if implementation-engine forgot to transition after fix
     { from: "fix_review",     to: "implementing" },
     { from: "fix_loop",       to: "implementing" },

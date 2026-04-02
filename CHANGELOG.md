@@ -1,5 +1,18 @@
 # Changelog
 
+## [Unreleased] - Headless Mode
+
+### Pipeline
+- Added `--headless` flag for external orchestrators (CI, autonomous agents)
+- Headless mode: no PR, no push, no human prompts, exit code 0/1 contract
+- TLDR summary on last line of stdout for machine parsing
+- New state transition: `reviewing -> merged` (direct, skips `pr_created` in headless)
+
+### MCP Server
+- Reads `SDD_MODE` environment variable at startup (`interactive` | `headless`)
+- `sdd_get_state` now includes `sdd_mode` in response for orchestrator awareness
+- Added `SddMode` type to shared types
+
 ## [Unreleased] - Post-Audit Fix
 
 ### Pipeline

@@ -49,6 +49,26 @@ The pipeline selects an execution mode automatically based on feature complexity
 | Standard | Medium complexity | All 8 phases |
 | Full | High/critical | All 8 phases + optional Opus review (`--opus-review`) |
 
+## Headless Mode
+
+Headless mode lets an external orchestrator (CI script, autonomous agent, cron job) run the SDD pipeline without human interaction, PRs, or pushes.
+
+**How to activate:** pass `--headless` flag and set the `SDD_MODE=headless` environment variable.
+
+**Output contract:**
+- Exit code `0` = success. A single atomic commit is ready on the worktree branch.
+- Exit code `1` = failure (escalated or awaiting_input — cannot proceed without human).
+- Last line of stdout: `TLDR: {one sentence summary of what was done}`
+
+The external orchestrator is responsible for merge, push, and branch cleanup.
+
+**Example:**
+```bash
+SDD_MODE=headless claude -p "/sdd-auto:run my-feature 'Add rate limiting to API'" --dangerously-skip-permissions
+```
+
+`--headless` is compatible with all execution modes (Express, Light, Standard, Full) and with `--skip-worktree`. It implies `--skip-pr` — do not pass both.
+
 ## Requirements
 
 - Claude Code CLI with plugin support

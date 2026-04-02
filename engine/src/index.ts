@@ -1571,9 +1571,25 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 });
 
+// ─── SDD Mode ───────────────────────────────────────────────────
+// Read once at startup. "headless" enables external-orchestrator mode
+// (no PR, no human interaction, exit codes for success/failure).
+
+import type { SddMode } from "./types.js";
+
+const SDD_MODE: SddMode = process.env.SDD_MODE === "headless" ? "headless" : "interactive";
+
+/** Exported for handlers that need to check the current mode. */
+export function getSddMode(): SddMode {
+  return SDD_MODE;
+}
+
 // ─── Start ───────────────────────────────────────────────────────
 
 async function main() {
+  if (SDD_MODE === "headless") {
+    console.error(`[SDD] Running in headless mode`);
+  }
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }

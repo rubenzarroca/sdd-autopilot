@@ -5,7 +5,7 @@ description: >
   Zero stops, fully autonomous. Orchestrates subagents via Claude Code native agent system and MCP tools.
   Use when the user says "auto run", "autopilot", "sdd auto", "build this feature autonomously",
   or runs /sdd-auto:run.
-argument-hint: '[<spec-name>] ["<brief>"] [--skip-worktree] [--skip-pr] [--recover <feature_id>] [--opus-review]'
+argument-hint: '[<spec-name>] ["<brief>"] [--skip-worktree] [--skip-pr] [--recover <feature_id>] [--opus-review] [--headless]'
 user-invokable: true
 ---
 
@@ -66,7 +66,7 @@ Before doing anything else, call `sdd_get_state` with the project path (no other
 
 - **If the tool does not exist**: STOP. Show: `> SDD MCP server not found. Set it up with: cd <plugin-path>/engine && npm run build && claude mcp add sdd-server -- node <plugin-path>/engine/build/index.js $(pwd)`. Then restart Claude Code and retry.
 - **If the tool returns an error** (e.g. state.json not found): MCP server is running. Continue — step 3 will auto-initialize.
-- **If valid state**: show `MCP connected | Project: {project_name}` and continue.
+- **If valid state**: show `MCP connected | Project: {project_name}` and continue. If the response includes `sdd_mode: "headless"`, show `Mode: headless` and set `headless = true` for the rest of the run.
 
 ## DX Output Protocol
 
@@ -130,7 +130,8 @@ For error translation patterns, read `docs/orchestrator/error-recovery.md` § Er
    ```
 
    **Parsing rules:**
-   - Flags (`--skip-worktree`, `--skip-pr`, `--recover <id>`) extracted first.
+   - Flags (`--skip-worktree`, `--skip-pr`, `--recover <id>`, `--headless`) extracted first.
+   - If `--headless`: set `skip_pr = true` implicitly. Do NOT require `--skip-pr`.
    - Remaining positional args: `[spec-name] [brief]`.
    - Quoted first arg = legacy feature description: slugify to `spec_name`, use full string as `brief`.
    - Unquoted kebab-case token = `spec_name`. Next quoted arg = `brief`.
@@ -253,6 +254,8 @@ If worktree fails: transition to `escalated`. If `--skip-worktree`: set `skip_wo
 | **Standard** | `complexity = "medium"` | All 8 phases, no pair review |
 | **Full** | `complexity = "high"` or `"critical"` | All 8 phases (opus review if `--opus-review`) |
 
+`--headless` is compatible with all execution modes. It does not force any specific mode.
+
 ### Fast Path Detection (post-triage)
 
 If ALL: `complexity` is `"trivial"` or `"low"`, estimated requirements < 5, estimated files < 3 → Express/Light path:
@@ -311,6 +314,12 @@ Group batch_eligible tasks into batches of up to 3. For details, see `docs/orche
 | DEPENDENCY_MISSING | Auto-resolve (npm install); if fails, escalate |
 | ESCALATE | Transition to `escalated`; write report; surface to user |
 
+### Headless error behavior
+
+If `--headless` and the pipeline reaches `escalated` or `awaiting_input`:
+1. Write: `TLDR: FAILED — {reason for escalation or awaiting_input}`
+2. Exit immediately. Do NOT prompt for human input. Do NOT wait.
+
 ## Escalation protocol
 
 Read `docs/orchestrator/error-recovery.md` § Escalation protocol.
@@ -319,6 +328,16 @@ Read `docs/orchestrator/error-recovery.md` § Escalation protocol.
 
 Phase 8 inline:
 
+**If `--headless`:**
+1. `git add -A && git commit -m "[sdd] {feature_name}"` (single atomic commit in worktree)
+2. `sdd_transition(reviewing, merged, orchestrator)` — direct, skipping `pr_created`
+3. Post-pipeline: execute retro and scoring normally
+4. Do NOT run `git push`. The external orchestrator handles merge/push/cleanup.
+5. Do NOT create a PR.
+6. Do NOT prompt for human confirmation at any step.
+7. On the LAST line of output, write exactly: `TLDR: {one sentence — what was done and what changed}`
+
+**If NOT `--headless`:**
 1. If worktree: `/worktree-pr finish` (worktree_path, title, description). Extract `pr_url` and `pr_number`. Call `sdd_update_feature`. Do NOT transition to `merged`.
 2. If `--skip-worktree`: `git add -A`, commit, push, `gh pr create`. Persist PR metadata.
 3. If `--skip-pr`: commit only.
@@ -338,6 +357,7 @@ After PR creation, verify merge via `gh api`. If merged: follow "On user-reporte
 - `--skip-pr`: Skip PR creation. Commits but does not push/open PR.
 - `--recover <feature_id>`: Resume incomplete run.
 - `--opus-review`: Use opus-coach for review (Full mode only).
+- `--headless`: Headless mode for external orchestrators. Implies `--skip-pr`. Do NOT pass both `--headless` and `--skip-pr`. In headless mode: no PR creation, no git push, no human interaction prompts, exit with code 0 on success or code 1 on failure. Requires `SDD_MODE=headless` environment variable for the MCP server.
 
 ## Run Recording (at pipeline completion)
 
