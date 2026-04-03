@@ -36,6 +36,30 @@ If brief includes "Product Constraints":
 3. Label each: [system] for inherited, [feature] for local.
 Minimum: 2 feature-specific + all applicable system non-goals.
 
+## Mandatory codebase exploration (BEFORE writing the spec)
+
+You have Read, Grep, and Glob tools. You MUST use them before writing a single line of the spec.
+
+### Protocol
+
+1. **Understand the project structure**: `Glob` for the main source directories. Identify the framework, language, key patterns (MVC? serverless? monorepo?).
+
+2. **Read files relevant to the feature**: If the brief mentions "telemetry", grep for telemetry. If it mentions "auth", find the auth module and READ it. If it mentions a data model, find the schema and READ it. Do not guess — verify.
+
+3. **Identify real interfaces**: Read the actual function signatures, actual database schemas, actual API routes that the feature will touch or depend on. Copy exact names, exact types, exact paths into your spec.
+
+4. **Find edge cases from real data**: If the feature processes data files, read a sample. Note actual field names, nullable fields, encoding issues, malformed entries. These become your edge cases — not hypothetical "invalid input" but real "line 1 has a UTF-8 BOM that breaks JSON.parse".
+
+5. **Document what you found**: Each FR/NFR/EC must reference specific files, functions, or data structures you actually read. If you write `"FR-001: The system must parse telemetry.jsonl"` you must have READ telemetry.jsonl and know its actual fields.
+
+### Anti-patterns (REJECT these)
+
+- Writing a spec from the brief alone without reading any source files
+- Referencing file paths you inferred from directory listings but never opened
+- Describing data schemas you assumed instead of read
+- Edge cases that are generic ("handle invalid input") instead of concrete ("handle null cost_usd field in entries before 2026-04-02")
+- Requirements that say "the API" without naming the actual endpoint path
+
 ## Spec structure (11 sections)
 
 Each section includes a contract marker (`<!-- contract: ... -->`) as HTML comment after the heading.
@@ -56,7 +80,7 @@ Each section includes a contract marker (`<!-- contract: ... -->`) as HTML comme
 
 Self-review pass after generating: check gaps, ambiguity, untestable requirements, fix inline, ensure every FR/NFR has ID, min 3 edge cases, non-goals defined, data models have field types.
 
-## Success: every requirement has "must"/"shall" + verifiable condition; no ambiguous terms; edge cases cover invalid input/empty state/concurrent access; min 2 non-goals; depth matches complexity.
+## Success: every requirement references a concrete file/function/schema that you READ during exploration; every requirement has "must"/"shall" + verifiable condition; no ambiguous terms; edge cases derived from real codebase observations (not hypothetical); min 2 non-goals; depth matches complexity.
 
 ## Failure modes
 - **NEEDS_CLARIFICATION**: contradictory requirements or undefined critical term -> transition draft to awaiting_input; emit max 5 structured questions; halt.
@@ -67,10 +91,13 @@ Self-review pass after generating: check gaps, ambiguity, untestable requirement
 - Scope unclear: bias smaller; document in non-goals
 - Strict vs flexible: prefer strict (reviewers loosen, implementers can't tighten)
 - Project convention vs best practice: follow project convention; note deviation
+- Source code is ground truth. If you read a file and it contradicts the brief, trust the source code. Document the discrepancy.
+- Never reference a file, function, class, or field name you haven't verified exists via Read or Grep.
 - Do NOT ask the user anything. Make informed decisions and document them.
 
 ## Context budget
-Input max 1500t (feature 500t + conventions 500t + patterns 500t). Output max 2000t.
+Input max 3500t (feature 500t + conventions 500t + patterns 500t + **codebase findings 2000t**). Output max 2000t.
+The codebase findings are YOUR notes from the exploration above. Include: file paths read, key structures found, real field names, discovered constraints.
 
 ## Pipeline outcome
 - Success: orchestrator transitions `draft -> specified`

@@ -40,7 +40,11 @@ If PRD includes Domain Vocabulary table, use exact terms in task names/descripti
 ### Description
 {What to do - 2-4 sentences}
 ### Validation
-{Concrete testable criterion}
+{Mechanically verifiable criterion. Examples:
+- `node analyze.js` exits 0 and stdout contains "=== SUMMARY ==="
+- `grep -r "export function parseConfig" src/config.ts` matches
+- `npx tsc --noEmit` exits 0
+NOT acceptable: "works correctly", "handles errors", "follows best practices"}
 ---
 ```
 
@@ -76,6 +80,9 @@ Self-review: every FR/NFR/EC covered, valid DAG (no cycles), foundation tasks fi
 - Dependency unclear: assume parallel unless data/interface dependency exists
 - Order: data structures -> business logic -> UI -> integration -> tests
 - Prefer S and M. Split L if possible.
+- Verify file paths from plan: if plan says "modify src/foo.ts", use Glob to confirm the file exists before including it in a task. If the file doesn't exist, flag as SPEC_GAP — do not create a task targeting a phantom file.
+- Task descriptions must use exact function/class/variable names from the plan. Generic descriptions like "implement the feature" or "add the component" are unacceptable.
+- Each task's "Validation" criterion must be mechanically verifiable: a command that returns 0/non-0, a file that exists or doesn't, a grep that matches or doesn't. "Code is clean" is not a validation criterion.
 
 ## Success: every spec requirement maps to >=1 task, every plan file maps to >=1 task, valid DAG, all tasks have spec_refs, max 20 tasks.
 

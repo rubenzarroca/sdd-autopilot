@@ -218,7 +218,7 @@ For every phase, execute these steps in order. No shortcuts — every step is ma
 
 4. **Memory** (optional): Check contract's `input.optional` for `memory.*` entries. If present, call `sdd_memory_read` with `verbosity: "standard"`. Phase-to-memory: specify → `project_conventions`; plan → `learned_patterns`; implement → both; verify → `project_conventions`. Skip for triage, tasks, review, pr.
 
-5. **Read inputs**: Read ONLY artifact files in the contract's `input.required`. **NEVER pre-research codebase for subagents.**
+5. **Read inputs**: Read artifact files in the contract's `input.required`. Subagents that need codebase context (spec-generator, plan-architect) will explore the repo themselves — do NOT pre-read for them, but DO pass `worktree_path` so they know where to look.
 
 6. **Launch subagent + token extraction**:
    - Record `started_at = new Date().toISOString()` and `t0 = Date.now()` BEFORE the Agent call.
@@ -305,7 +305,9 @@ If `context7` MCP tools are available, append to implementation-engine and verif
 
 ### Brief injection
 
-- **spec-generator, plan-architect, task-decomposer**: PRD + constraints + `worktree_path`. Spec-generator also gets `docs/roadmap.md` Now + Next sections + `roadmap_position` + `roadmap_dependencies`.
+- **spec-generator**: PRD + constraints + `worktree_path` + instruction: "Explore the codebase BEFORE writing the spec. You have Read/Grep/Glob — use them." Also gets `docs/roadmap.md` Now + Next sections + `roadmap_position` + `roadmap_dependencies`.
+- **plan-architect**: PRD + constraints + `worktree_path` + instruction: "Read every file you plan to modify. Verify every dependency."
+- **task-decomposer**: PRD + constraints + `worktree_path`.
 - **implementation-engine, opus-coach**: constraints only ("AUTHORITATIVE" framing)
 - **implementation-engine, verification-engine**: `available_services` (MCP)
 - **haiku-triage**: `spec_name` + `brief` as `feature_description`. If `docs/roadmap.md` exists, append full file.
