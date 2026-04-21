@@ -42,7 +42,7 @@ When the feature is in a given state, the orchestrator MUST delegate to the agen
 | Current state | Agent to launch | Transition |
 |---------------|----------------|------------|
 | `draft` | `spec-generator` | draft -> specified |
-| `specified` | `plan-architect` | specified -> planned |
+| `specified` | `plan-architect` (or `plan-architect-opus` for complexity high/critical — see Model routing) | specified -> planned |
 | `planned` | `task-decomposer` | planned -> decomposed |
 | `decomposed` / `implementing` | `implementation-engine` | decomposed -> implementing (per task) |
 | `fix_loop` | `implementation-engine` | fix_loop -> implementing |
@@ -190,7 +190,7 @@ For every phase, execute these steps in order. No shortcuts — every step is ma
 |-------|-------|-------------|--------------|-------|
 | triage | haiku-triage | 0.90 | 0.10 | haiku |
 | specify | spec-generator | 0.70 | 0.30 | sonnet |
-| plan | plan-architect | 0.75 | 0.25 | sonnet |
+| plan | plan-architect / plan-architect-opus | 0.75 | 0.25 | sonnet or opus (see Model routing) |
 | tasks | task-decomposer | 0.80 | 0.20 | sonnet |
 | implement | implementation-engine | 0.60 | 0.40 | sonnet |
 | verify | verification-engine | 0.85 | 0.15 | sonnet |
@@ -303,10 +303,25 @@ After triage, inject skills into subagents based on `feature_type`:
 
 If `context7` MCP tools are available, append to implementation-engine and verification-engine prompts.
 
+### Model routing (by complexity)
+
+For the **plan** phase only, the subagent invoked depends on triage `complexity`:
+
+| complexity | `subagent_type` | model | effort |
+|---|---|---|---|
+| `trivial`, `low`, `medium` | `plan-architect` | sonnet | high |
+| `high`, `critical` | `plan-architect-opus` | opus | xhigh |
+
+Rationale (economic): Opus 4.7 + xhigh costs ~5x Sonnet + high per plan. Only high/critical features have enough architectural leverage (multiple files, non-trivial decisions, irreversible choices) to amortize the premium. For medium or lower, Sonnet's plans are empirically sufficient and the 5x spend is unjustified. `xhigh` effort is Opus-exclusive and cannot be overridden at runtime — the variant agent is the only way to deliver opus+xhigh together.
+
+When invoking `plan-architect-opus`, use opus pricing (from the Model pricing table) for `cost_usd` computation in step 6 of the phase protocol. All other phase protocol steps are identical.
+
+**Important — `agent_id` for `sdd_transition`:** The engine's `AGENT_PERMISSIONS` (state.ts) authorizes only `"plan-architect"` for the `specified -> planned` transition. Both variants share the same semantic role, so the orchestrator MUST pass `agent_id: "plan-architect"` to `sdd_transition` regardless of whether the spawned `subagent_type` was `plan-architect` or `plan-architect-opus`. The variant is an execution choice; the role is the authorization unit.
+
 ### Brief injection
 
 - **spec-generator**: PRD + constraints + `worktree_path` + instruction: "Explore the codebase BEFORE writing the spec. You have Read/Grep/Glob — use them." Also gets `docs/roadmap.md` Now + Next sections + `roadmap_position` + `roadmap_dependencies`.
-- **plan-architect**: PRD + constraints + `worktree_path` + instruction: "Read every file you plan to modify. Verify every dependency."
+- **plan-architect** / **plan-architect-opus**: PRD + constraints + `worktree_path` + instruction: "Read every file you plan to modify. Verify every dependency." Select variant based on complexity (see Model routing).
 - **task-decomposer**: PRD + constraints + `worktree_path`.
 - **implementation-engine, opus-coach**: constraints only ("AUTHORITATIVE" framing)
 - **implementation-engine, verification-engine**: `available_services` (MCP)
@@ -364,7 +379,7 @@ If NOT met → Standard/Full path. Always show which path was activated and why.
 |---|-------|----------|-------|-----------------|
 | 1 | Triage | `haiku-triage` | haiku | — |
 | 2 | Specify | `spec-generator` | sonnet | `draft` -> `specified` |
-| 3 | Plan | `plan-architect` | sonnet | `specified` -> `planned` |
+| 3 | Plan | `plan-architect` / `plan-architect-opus` (see Model routing) | sonnet or opus | `specified` -> `planned` |
 | 4 | Tasks | `task-decomposer` | sonnet | `planned` -> `decomposed` |
 | 5 | Implement | `implementation-engine` | sonnet | `decomposed` -> `implementing` |
 | 6 | Verify | `verification-engine` | sonnet | `implementing` -> `verifying` -> `reviewing` |

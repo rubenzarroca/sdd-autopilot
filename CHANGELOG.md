@@ -1,5 +1,20 @@
 # Changelog
 
+## [Unreleased] - Opus Routing for plan-architect (complexity high/critical)
+
+### Agents
+- **New**: `.claude/agents/plan-architect-opus.md` — variant of `plan-architect` with `model: opus` + `effort: xhigh`. Literal copy of the original prompt; only frontmatter differs.
+
+### Pipeline
+- **Model routing by complexity** in `/sdd-auto:run` plan phase:
+  - `trivial | low | medium` → `plan-architect` (sonnet + high, default)
+  - `high | critical` → `plan-architect-opus` (opus + xhigh)
+- Cost-optimized: Opus 4.7 + xhigh (~5x per plan) reserved for features with enough architectural leverage to amortize the premium.
+- Orchestrator continues to pass `agent_id: "plan-architect"` to `sdd_transition` for both variants (shared semantic role; `AGENT_PERMISSIONS` in state.ts unchanged).
+
+### Docs
+- `skills/auto-run/SKILL.md`: added "Model routing (by complexity)" section; updated State→Agent delegation table, Token ratio table, Phase sequence table, and Brief injection to reference the variant.
+
 ## [Unreleased] - Headless Mode + MCP Connection Fix
 
 ### Critical Fix

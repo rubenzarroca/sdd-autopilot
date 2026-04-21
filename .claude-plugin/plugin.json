@@ -1,5 +1,6 @@
 {
   "name": "sdd-autopilot",
+  "version": "1.1.0",
   "description": "SDD Autopilot — Zero-stop, fully autonomous specify → plan → tasks → implement → verify → review → PR pipeline. MCP server + native Claude Code subagents, no direct API calls.",
   "author": {
     "name": "Rubén Zarroca"
