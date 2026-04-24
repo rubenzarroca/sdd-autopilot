@@ -9,10 +9,10 @@ import { homedir } from "node:os";
 import { StateManager, AGENT_PERMISSIONS } from "./state.js";
 import { MemoryManager, sanitizeMemoryContent, validateExtractionFilter, consolidateEntry } from "./memory.js";
 import type { AgentId, FeatureState, PipelineContracts, RunHistoryEntry, SddMode } from "./types.js";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
-import { fileExists, atomicAppendJSONL } from "./utils.js";
+import { fileExists, atomicAppendJSONL, atomicWriteText, validateProjectPath } from "./utils.js";
 
 // ─── Verbosity (shared utility) ─────────────────────────────────
 import { resolveVerbosity, type Verbosity } from "./verbosity.js";
@@ -552,6 +552,9 @@ export async function handleDeltaCheck(params: {
   current_failures: number;
   current_failure_details?: string[];
 }): Promise<unknown> {
+  const check = validateProjectPath(params.project_path);
+  if (!check.ok) return { error: check.error };
+
   const sm = new StateManager(params.project_path);
   const state = await sm.read();
   const feature = state.features[params.feature_id];
@@ -568,7 +571,7 @@ export async function handleDeltaCheck(params: {
   const prevEntry = history?.filter(h => h.phase === params.phase_id).pop();
   const previousFailures = prevEntry?.failures;
 
-  // Store current as new entry
+  // Single read → mutate in-memory → single write (atomic via sm.write).
   if (!history) {
     (feature as any).fix_loop_history = [];
   }
@@ -837,8 +840,8 @@ export async function handleMemoryWrite(params: {
   const contentWithProvenance = `${provenanceComment}\n${params.content}`;
 
   // Helper to get existing entries for a section (split by double-newline blocks)
-  const getExistingEntries = (sectionName: string, filePath: string): string[] => {
-    const fileContent = readFileSync(filePath, "utf-8");
+  const getExistingEntries = async (sectionName: string, filePath: string): Promise<string[]> => {
+    const fileContent = await readFile(filePath, "utf-8");
     const sectionBody = mm.extractSection(fileContent, sectionName);
     if (!sectionBody || sectionBody.startsWith("(no ")) return [];
     return sectionBody.split("\n\n").filter(b => b.trim());
@@ -851,7 +854,7 @@ export async function handleMemoryWrite(params: {
 
     if (params.section === "learned_patterns") {
       // GAP-01: Consolidation check
-      const existing = getExistingEntries("Learned Patterns", mm.projectMemoryPath);
+      const existing = await getExistingEntries("Learned Patterns", mm.projectMemoryPath);
       const consolidation = consolidateEntry(existing, params.content, params.section);
 
       if (consolidation.action === "skip") {
@@ -875,17 +878,17 @@ export async function handleMemoryWrite(params: {
       return result;
     } else if (params.section === "run_history") {
       // Append raw content to run history (no consolidation for run_history)
-      const content = readFileSync(mm.projectMemoryPath, "utf-8");
+      const content = await readFile(mm.projectMemoryPath, "utf-8");
       const existing = mm.extractSection(content, "Run History");
       const body = existing.startsWith("(no runs") ? contentWithProvenance : `${existing.trim()}\n\n${contentWithProvenance}`;
       const updated = content.replace(
         new RegExp(`(## Run History\\s*\\n)[\\s\\S]*?(?=\\n## |$)`),
         `$1${body}\n\n`,
       );
-      writeFileSync(mm.projectMemoryPath, updated, "utf-8");
+      await atomicWriteText(mm.projectMemoryPath, updated);
     } else if (params.section === "project_conventions") {
       // GAP-01: Consolidation check
-      const existing = getExistingEntries("Project Conventions", mm.projectMemoryPath);
+      const existing = await getExistingEntries("Project Conventions", mm.projectMemoryPath);
       const consolidation = consolidateEntry(existing, params.content, params.section);
 
       if (consolidation.action === "skip") {
@@ -895,24 +898,24 @@ export async function handleMemoryWrite(params: {
       }
       if (consolidation.action === "update" && consolidation.targetIndex !== undefined) {
         existing[consolidation.targetIndex] = contentWithProvenance;
-        const fileContent = readFileSync(mm.projectMemoryPath, "utf-8");
+        const fileContent = await readFile(mm.projectMemoryPath, "utf-8");
         const updated = fileContent.replace(
           new RegExp(`(## Project Conventions\\s*\\n)[\\s\\S]*?(?=\\n## |$)`),
           `$1${existing.join("\n\n")}\n\n`,
         );
-        writeFileSync(mm.projectMemoryPath, updated, "utf-8");
+        await atomicWriteText(mm.projectMemoryPath, updated);
         const result: Record<string, unknown> = { written: true, action: "updated", reason: consolidation.reason, similarity_score: consolidation.similarity_score, timestamp, confidence };
 
         if (!sanitization.clean) result.sanitization_warnings = sanitization.warnings;
         return result;
       }
       // action === "create"
-      const content = readFileSync(mm.projectMemoryPath, "utf-8");
+      const content = await readFile(mm.projectMemoryPath, "utf-8");
       const updated = content.replace(
         new RegExp(`(## Project Conventions\\s*\\n)[\\s\\S]*?(?=\\n## |$)`),
         `$1${contentWithProvenance}\n\n`,
       );
-      writeFileSync(mm.projectMemoryPath, updated, "utf-8");
+      await atomicWriteText(mm.projectMemoryPath, updated);
     }
   } else {
     // User scope
@@ -920,7 +923,7 @@ export async function handleMemoryWrite(params: {
 
     if (params.section === "cross_project_patterns") {
       // GAP-01: Consolidation check
-      const existing = getExistingEntries("Cross-Project Patterns", mm.userMemoryPath);
+      const existing = await getExistingEntries("Cross-Project Patterns", mm.userMemoryPath);
       const consolidation = consolidateEntry(existing, params.content, params.section);
 
       if (consolidation.action === "skip") {
@@ -930,13 +933,13 @@ export async function handleMemoryWrite(params: {
       }
       if (consolidation.action === "update" && consolidation.targetIndex !== undefined) {
         existing[consolidation.targetIndex] = contentWithProvenance;
-        const fileContent = readFileSync(mm.userMemoryPath, "utf-8");
+        const fileContent = await readFile(mm.userMemoryPath, "utf-8");
         const sectionBody = existing.join("\n\n");
         const updated = fileContent.replace(
           new RegExp(`(## Cross-Project Patterns\\s*\\n)[\\s\\S]*?(?=\\n## |$)`),
           `$1${sectionBody}\n\n`,
         );
-        writeFileSync(mm.userMemoryPath, updated, "utf-8");
+        await atomicWriteText(mm.userMemoryPath, updated);
         const result: Record<string, unknown> = { written: true, action: "updated", reason: consolidation.reason, similarity_score: consolidation.similarity_score, timestamp, confidence };
 
         if (!sanitization.clean) result.sanitization_warnings = sanitization.warnings;
@@ -964,15 +967,17 @@ export async function handleMemoryWrite(params: {
 export async function handleTickDecay(params: {
   project_path: string;
 }): Promise<unknown> {
+  const check = validateProjectPath(params.project_path);
+  if (!check.ok) return { error: check.error };
+
   const mm = new MemoryManager(params.project_path);
-  const { existsSync, readFileSync: readSync, writeFileSync: writeSync } = await import("node:fs");
 
   // Adaptive exponential decay for learned patterns (replaces mm.tickPatternTTLs())
   let removedPatterns = 0;
   const INITIAL_TTL = 20;
 
-  if (existsSync(mm.projectMemoryPath)) {
-    const content = readSync(mm.projectMemoryPath, "utf-8");
+  if (await fileExists(mm.projectMemoryPath)) {
+    const content = await readFile(mm.projectMemoryPath, "utf-8");
     const section = mm.extractSection(content, "Learned Patterns");
 
     if (section && !section.startsWith("(no patterns")) {
@@ -1018,7 +1023,7 @@ export async function handleTickDecay(params: {
           const nextHeader = /^## /m.exec(rest);
           const before = content.slice(0, startIdx);
           const after = nextHeader ? rest.slice(nextHeader.index) : "";
-          writeSync(mm.projectMemoryPath, before + "\n" + newBody + "\n\n" + after, "utf-8");
+          await atomicWriteText(mm.projectMemoryPath, before + "\n" + newBody + "\n\n" + after);
         }
       }
     }
@@ -1069,37 +1074,40 @@ export async function handleUpdateTask(params: {
   status: "pending" | "in-progress" | "completed";
   title?: string;
 }): Promise<unknown> {
+  const check = validateProjectPath(params.project_path);
+  if (!check.ok) return { error: check.error };
+
+  // Single read → mutate in-memory → single write.
+  // Previous implementation did up to 3 reads + 3 writes, creating a TOCTOU
+  // window where an interleaved handler's write could be silently overwritten.
   const sm = new StateManager(params.project_path);
-  const feature = await sm.getFeature(params.feature_id);
+  const state = await sm.read();
+  const feature = state.features[params.feature_id];
 
   if (!feature) {
     return { error: `Feature "${params.feature_id}" not found` };
   }
 
-  // Upsert: auto-create task if it doesn't exist yet
-  let created = false;
-  if (!feature.tasks[params.task_id]) {
-    const state = await sm.read();
-    state.features[params.feature_id].tasks[params.task_id] = {
+  const existedBefore = !!feature.tasks[params.task_id];
+  if (!existedBefore) {
+    feature.tasks[params.task_id] = {
       status: "pending",
       title: params.title ?? params.task_id,
     };
-    await sm.write(state);
-    created = true;
   }
 
+  const task = feature.tasks[params.task_id];
   if (params.status === "completed") {
-    await sm.markTaskCompleted(params.feature_id, params.task_id);
-  } else if (!created || params.status !== "pending") {
-    // Skip redundant write when we just created with "pending"
-    const state = await sm.read();
-    const t = state.features[params.feature_id].tasks[params.task_id];
-    t.status = params.status;
-    if (params.title) t.title = params.title;
-    await sm.write(state);
+    task.status = "completed";
+    task.completed_at = new Date().toISOString();
+  } else {
+    task.status = params.status;
+    if (params.title) task.title = params.title;
   }
 
-  return { updated: true, task_id: params.task_id, status: params.status, created };
+  await sm.write(state);
+
+  return { updated: true, task_id: params.task_id, status: params.status, created: !existedBefore };
 }
 
 // ─── 13. sdd_update_feature ──────────────────────────────────────

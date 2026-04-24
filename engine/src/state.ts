@@ -6,7 +6,7 @@ import { readFile, mkdir, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
-import { atomicWriteJSON } from "./utils.js";
+import { atomicWriteJSON, validateProjectPath } from "./utils.js";
 import type {
   StateJson,
   FeatureState,
@@ -112,6 +112,10 @@ export class StateManager {
   private static lastMtime = new Map<string, number>();
 
   constructor(projectRoot: string) {
+    // Path validation — prevents silent creation of .sdd/state.json at
+    // unintended locations when an MCP caller passes a relative or empty path.
+    const check = validateProjectPath(projectRoot);
+    if (!check.ok) throw new Error(`[SDD] ${check.error}`);
     this.statePath = join(projectRoot, ".sdd", "state.json");
   }
 

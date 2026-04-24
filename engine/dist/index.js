@@ -6807,10 +6807,13 @@ var utils_exports = {};
 __export(utils_exports, {
   atomicAppendJSONL: () => atomicAppendJSONL,
   atomicWriteJSON: () => atomicWriteJSON,
+  atomicWriteText: () => atomicWriteText,
   fileExists: () => fileExists,
-  parseJsonl: () => parseJsonl
+  parseJsonl: () => parseJsonl,
+  validateProjectPath: () => validateProjectPath
 });
-import { access, writeFile, rename, open } from "node:fs/promises";
+import { access, rename, open, unlink } from "node:fs/promises";
+import { isAbsolute } from "node:path";
 async function fileExists(path) {
   try {
     await access(path);
@@ -6818,6 +6821,11 @@ async function fileExists(path) {
   } catch {
     return false;
   }
+}
+function validateProjectPath(p) {
+  if (!p || typeof p !== "string") return { ok: false, error: "project_path is required" };
+  if (!isAbsolute(p)) return { ok: false, error: `project_path must be an absolute path (got: ${p})` };
+  return { ok: true };
 }
 function parseJsonl(raw, filePath) {
   const lines = raw.split("\n").filter((l) => l.trim() !== "");
@@ -6836,10 +6844,36 @@ function parseJsonl(raw, filePath) {
   return data;
 }
 async function atomicWriteJSON(filePath, data) {
-  const tmp = filePath + ".tmp";
-  const serialized = JSON.stringify(data, null, 2);
-  await writeFile(tmp, serialized, "utf-8");
-  await rename(tmp, filePath);
+  await atomicWriteText(filePath, JSON.stringify(data, null, 2));
+}
+async function atomicWriteText(filePath, content) {
+  const tmp = `${filePath}.tmp.${process.pid}.${Date.now()}`;
+  const fh = await open(tmp, "w");
+  try {
+    await fh.writeFile(content, "utf-8");
+    await fh.sync();
+  } finally {
+    await fh.close();
+  }
+  const MAX_RETRIES = 10;
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      await rename(tmp, filePath);
+      return;
+    } catch (e) {
+      const code = e.code;
+      if (code === "EPERM" && attempt < MAX_RETRIES) {
+        const delay = Math.min(500, 5 * 2 ** (attempt - 1));
+        await new Promise((r) => setTimeout(r, delay));
+        continue;
+      }
+      try {
+        await unlink(tmp);
+      } catch {
+      }
+      throw e;
+    }
+  }
 }
 async function atomicAppendJSONL(filePath, data) {
   const line = JSON.stringify(data) + "\n";
@@ -6956,6 +6990,8 @@ var init_state = __esm({
       static cache = /* @__PURE__ */ new Map();
       static lastMtime = /* @__PURE__ */ new Map();
       constructor(projectRoot) {
+        const check2 = validateProjectPath(projectRoot);
+        if (!check2.ok) throw new Error(`[SDD] ${check2.error}`);
         this.statePath = join(projectRoot, ".sdd", "state.json");
       }
       /** Clear the in-memory cache (for testing or refresh_state). */
@@ -22720,7 +22756,7 @@ ${newEntry}`;
 // src/handlers.ts
 init_utils();
 init_verbosity();
-import { readFileSync as readFileSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { readFileSync as readFileSync2 } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname as dirname3 } from "node:path";
 var _sddMode = null;
@@ -23178,6 +23214,8 @@ async function handleClassifyFailure(params) {
   return { category, confidence, reasoning };
 }
 async function handleDeltaCheck(params) {
+  const check2 = validateProjectPath(params.project_path);
+  if (!check2.ok) return { error: check2.error };
   const sm = new StateManager(params.project_path);
   const state = await sm.read();
   const feature = state.features[params.feature_id];
@@ -23391,8 +23429,8 @@ async function handleMemoryWrite(params) {
   })} -->`;
   const contentWithProvenance = `${provenanceComment}
 ${params.content}`;
-  const getExistingEntries = (sectionName, filePath) => {
-    const fileContent = readFileSync2(filePath, "utf-8");
+  const getExistingEntries = async (sectionName, filePath) => {
+    const fileContent = await readFile3(filePath, "utf-8");
     const sectionBody = mm.extractSection(fileContent, sectionName);
     if (!sectionBody || sectionBody.startsWith("(no ")) return [];
     return sectionBody.split("\n\n").filter((b) => b.trim());
@@ -23401,7 +23439,7 @@ ${params.content}`;
     mm.initProjectMemory("project", "");
     mm.ensureProjectSections();
     if (params.section === "learned_patterns") {
-      const existing = getExistingEntries("Learned Patterns", mm.projectMemoryPath);
+      const existing = await getExistingEntries("Learned Patterns", mm.projectMemoryPath);
       const consolidation = consolidateEntry(existing, params.content, params.section);
       if (consolidation.action === "skip") {
         const result3 = { written: false, action: "skipped", reason: consolidation.reason, similarity_score: consolidation.similarity_score, timestamp, confidence };
@@ -23419,7 +23457,7 @@ ${params.content}`;
       if (!sanitization.clean) result2.sanitization_warnings = sanitization.warnings;
       return result2;
     } else if (params.section === "run_history") {
-      const content = readFileSync2(mm.projectMemoryPath, "utf-8");
+      const content = await readFile3(mm.projectMemoryPath, "utf-8");
       const existing = mm.extractSection(content, "Run History");
       const body = existing.startsWith("(no runs") ? contentWithProvenance : `${existing.trim()}
 
@@ -23430,9 +23468,9 @@ ${contentWithProvenance}`;
 
 `
       );
-      writeFileSync2(mm.projectMemoryPath, updated, "utf-8");
+      await atomicWriteText(mm.projectMemoryPath, updated);
     } else if (params.section === "project_conventions") {
-      const existing = getExistingEntries("Project Conventions", mm.projectMemoryPath);
+      const existing = await getExistingEntries("Project Conventions", mm.projectMemoryPath);
       const consolidation = consolidateEntry(existing, params.content, params.section);
       if (consolidation.action === "skip") {
         const result2 = { written: false, action: "skipped", reason: consolidation.reason, similarity_score: consolidation.similarity_score, timestamp, confidence };
@@ -23440,31 +23478,31 @@ ${contentWithProvenance}`;
       }
       if (consolidation.action === "update" && consolidation.targetIndex !== void 0) {
         existing[consolidation.targetIndex] = contentWithProvenance;
-        const fileContent = readFileSync2(mm.projectMemoryPath, "utf-8");
+        const fileContent = await readFile3(mm.projectMemoryPath, "utf-8");
         const updated2 = fileContent.replace(
           new RegExp(`(## Project Conventions\\s*\\n)[\\s\\S]*?(?=\\n## |$)`),
           `$1${existing.join("\n\n")}
 
 `
         );
-        writeFileSync2(mm.projectMemoryPath, updated2, "utf-8");
+        await atomicWriteText(mm.projectMemoryPath, updated2);
         const result2 = { written: true, action: "updated", reason: consolidation.reason, similarity_score: consolidation.similarity_score, timestamp, confidence };
         if (!sanitization.clean) result2.sanitization_warnings = sanitization.warnings;
         return result2;
       }
-      const content = readFileSync2(mm.projectMemoryPath, "utf-8");
+      const content = await readFile3(mm.projectMemoryPath, "utf-8");
       const updated = content.replace(
         new RegExp(`(## Project Conventions\\s*\\n)[\\s\\S]*?(?=\\n## |$)`),
         `$1${contentWithProvenance}
 
 `
       );
-      writeFileSync2(mm.projectMemoryPath, updated, "utf-8");
+      await atomicWriteText(mm.projectMemoryPath, updated);
     }
   } else {
     mm.initUserMemory();
     if (params.section === "cross_project_patterns") {
-      const existing = getExistingEntries("Cross-Project Patterns", mm.userMemoryPath);
+      const existing = await getExistingEntries("Cross-Project Patterns", mm.userMemoryPath);
       const consolidation = consolidateEntry(existing, params.content, params.section);
       if (consolidation.action === "skip") {
         const result2 = { written: false, action: "skipped", reason: consolidation.reason, similarity_score: consolidation.similarity_score, timestamp, confidence };
@@ -23472,7 +23510,7 @@ ${contentWithProvenance}`;
       }
       if (consolidation.action === "update" && consolidation.targetIndex !== void 0) {
         existing[consolidation.targetIndex] = contentWithProvenance;
-        const fileContent = readFileSync2(mm.userMemoryPath, "utf-8");
+        const fileContent = await readFile3(mm.userMemoryPath, "utf-8");
         const sectionBody = existing.join("\n\n");
         const updated = fileContent.replace(
           new RegExp(`(## Cross-Project Patterns\\s*\\n)[\\s\\S]*?(?=\\n## |$)`),
@@ -23480,7 +23518,7 @@ ${contentWithProvenance}`;
 
 `
         );
-        writeFileSync2(mm.userMemoryPath, updated, "utf-8");
+        await atomicWriteText(mm.userMemoryPath, updated);
         const result2 = { written: true, action: "updated", reason: consolidation.reason, similarity_score: consolidation.similarity_score, timestamp, confidence };
         if (!sanitization.clean) result2.sanitization_warnings = sanitization.warnings;
         return result2;
@@ -23499,12 +23537,13 @@ ${contentWithProvenance}`;
   return result;
 }
 async function handleTickDecay(params) {
+  const check2 = validateProjectPath(params.project_path);
+  if (!check2.ok) return { error: check2.error };
   const mm = new MemoryManager(params.project_path);
-  const { existsSync: existsSync3, readFileSync: readSync, writeFileSync: writeSync } = await import("node:fs");
   let removedPatterns = 0;
   const INITIAL_TTL = 20;
-  if (existsSync3(mm.projectMemoryPath)) {
-    const content = readSync(mm.projectMemoryPath, "utf-8");
+  if (await fileExists(mm.projectMemoryPath)) {
+    const content = await readFile3(mm.projectMemoryPath, "utf-8");
     const section = mm.extractSection(content, "Learned Patterns");
     if (section && !section.startsWith("(no patterns")) {
       const blocks = section.split("\n\n").filter((b) => b.trim());
@@ -23540,7 +23579,7 @@ async function handleTickDecay(params) {
           const nextHeader = /^## /m.exec(rest);
           const before = content.slice(0, startIdx);
           const after = nextHeader ? rest.slice(nextHeader.index) : "";
-          writeSync(mm.projectMemoryPath, before + "\n" + newBody + "\n\n" + after, "utf-8");
+          await atomicWriteText(mm.projectMemoryPath, before + "\n" + newBody + "\n\n" + after);
         }
       }
     }
@@ -23570,31 +23609,31 @@ async function handleTickMaintenance(params) {
   };
 }
 async function handleUpdateTask(params) {
+  const check2 = validateProjectPath(params.project_path);
+  if (!check2.ok) return { error: check2.error };
   const sm = new StateManager(params.project_path);
-  const feature = await sm.getFeature(params.feature_id);
+  const state = await sm.read();
+  const feature = state.features[params.feature_id];
   if (!feature) {
     return { error: `Feature "${params.feature_id}" not found` };
   }
-  let created = false;
-  if (!feature.tasks[params.task_id]) {
-    const state = await sm.read();
-    state.features[params.feature_id].tasks[params.task_id] = {
+  const existedBefore = !!feature.tasks[params.task_id];
+  if (!existedBefore) {
+    feature.tasks[params.task_id] = {
       status: "pending",
       title: params.title ?? params.task_id
     };
-    await sm.write(state);
-    created = true;
   }
+  const task = feature.tasks[params.task_id];
   if (params.status === "completed") {
-    await sm.markTaskCompleted(params.feature_id, params.task_id);
-  } else if (!created || params.status !== "pending") {
-    const state = await sm.read();
-    const t = state.features[params.feature_id].tasks[params.task_id];
-    t.status = params.status;
-    if (params.title) t.title = params.title;
-    await sm.write(state);
+    task.status = "completed";
+    task.completed_at = (/* @__PURE__ */ new Date()).toISOString();
+  } else {
+    task.status = params.status;
+    if (params.title) task.title = params.title;
   }
-  return { updated: true, task_id: params.task_id, status: params.status, created };
+  await sm.write(state);
+  return { updated: true, task_id: params.task_id, status: params.status, created: !existedBefore };
 }
 async function handleUpdateFeature(params) {
   const sm = new StateManager(params.project_path);
@@ -24303,7 +24342,7 @@ init_metacognition();
 
 // src/tool-factory.ts
 init_utils();
-import { readFile as readFile5, writeFile as writeFile3, mkdir as mkdir5 } from "node:fs/promises";
+import { readFile as readFile5, writeFile as writeFile2, mkdir as mkdir5 } from "node:fs/promises";
 import { resolve as resolve5 } from "node:path";
 async function handleProposeTool(params) {
   try {
@@ -24465,7 +24504,7 @@ async function handleGenerateToolPrompt(params) {
       ""
     ].join("\n");
     const promptPath = resolve5(params.project_path, ".sdd", "proposals", `prompt-${params.proposal_name}.md`);
-    await writeFile3(promptPath, prompt, "utf-8");
+    await writeFile2(promptPath, prompt, "utf-8");
     proposal.status = "prompt_generated";
     await atomicWriteJSON(proposalPath, proposal);
     return { success: true, prompt_path: promptPath };
@@ -24473,6 +24512,9 @@ async function handleGenerateToolPrompt(params) {
     return { success: false, error: err instanceof Error ? err.message : String(err) };
   }
 }
+
+// src/index.ts
+init_utils();
 
 // src/tool-stratification.json
 var tool_stratification_default = {
@@ -25874,6 +25916,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       content: [{ type: "text", text: JSON.stringify({ error: `Unknown tool: "${name}"` }) }],
       isError: true
     };
+  }
+  const typedArgs = args ?? {};
+  if ("project_path" in typedArgs) {
+    const check2 = validateProjectPath(typedArgs.project_path);
+    if (!check2.ok) {
+      return {
+        content: [{ type: "text", text: JSON.stringify({ error: check2.error }) }],
+        isError: true
+      };
+    }
   }
   try {
     const result = await handler(args ?? {});

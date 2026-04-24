@@ -61,6 +61,8 @@ import {
   handleGenerateToolPrompt,
 } from "./tool-factory.js";
 
+import { validateProjectPath } from "./utils.js";
+
 import toolStratification from "./tool-stratification.json" with { type: "json" };
 
 // ─── Types ───────────────────────────────────────────────────────
@@ -1557,6 +1559,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       content: [{ type: "text", text: JSON.stringify({ error: `Unknown tool: "${name}"` }) }],
       isError: true,
     };
+  }
+
+  // Defense-in-depth: validate project_path centrally for every tool that
+  // accepts it. Handlers also validate via StateManager, but some handlers
+  // (log_event, memory_write, append_signal) touch disk without going
+  // through StateManager — this catches them too.
+  const typedArgs = (args ?? {}) as Record<string, unknown>;
+  if ("project_path" in typedArgs) {
+    const check = validateProjectPath(typedArgs.project_path as string | undefined);
+    if (!check.ok) {
+      return {
+        content: [{ type: "text", text: JSON.stringify({ error: check.error }) }],
+        isError: true,
+      };
+    }
   }
 
   try {
