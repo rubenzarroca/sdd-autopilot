@@ -3,15 +3,15 @@
   "version": "1.1.0",
   "description": "SDD Autopilot MCP server engine",
   "type": "module",
-  "main": "build/index.js",
+  "main": "dist/index.js",
   "bin": {
-    "sdd-autopilot": "build/index.js"
+    "sdd-autopilot": "dist/index.js"
   },
   "scripts": {
-    "postinstall": "npm run build",
+    "bundle": "esbuild src/index.ts --bundle --platform=node --target=node22 --format=esm --banner:js=\"import{createRequire}from'module';const require=createRequire(import.meta.url);\" --outfile=dist/index.js && node scripts/copy-runtime-assets.mjs",
     "build": "tsc && cp src/contracts.json build/contracts.json && node scripts/compute-tools-hash.mjs && cp src/tools-manifest.json build/tools-manifest.json",
     "dev": "tsc --watch",
-    "start": "node build/index.js",
+    "start": "node dist/index.js",
     "test:e2e": "node --test tests/e2e/pipeline-behavioral.test.mjs"
   },
   "dependencies": {
@@ -19,6 +19,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "esbuild": "^0.24.0",
     "typescript": "^5.7.0"
   }
 }
